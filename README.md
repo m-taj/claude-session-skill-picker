@@ -19,7 +19,7 @@ A `UserPromptSubmit` hook for [Claude Code](https://claude.ai/code) that pops up
 ### Option A — One-liner (after cloning)
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/claude-session-skill-picker.git
+git clone https://github.com/m-taj/claude-session-skill-picker.git
 cd claude-session-skill-picker
 bash install.sh
 ```
