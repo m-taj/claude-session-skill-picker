@@ -35,7 +35,7 @@ mkdir -p ~/.claude/hooks
 **2. Download the hook script**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/claude-session-skill-picker/main/startup-skills.sh \
+curl -fsSL https://raw.githubusercontent.com/m-taj/claude-session-skill-picker/main/startup-skills.sh \
   -o ~/.claude/hooks/startup-skills.sh
 chmod +x ~/.claude/hooks/startup-skills.sh
 ```
