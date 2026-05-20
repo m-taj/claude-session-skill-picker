@@ -1,9 +1,9 @@
+
 # Claude Session Skill Picker
 
 A `UserPromptSubmit` hook for [Claude Code](https://claude.ai/code) that pops up a skill selector at the start of each new session. On macOS it shows a native dialog; on other platforms it falls back to a numbered text menu in the terminal.
 
-![Demo placeholder — screenshot of the native macOS skill picker dialog](./images/demo.png)
-
+<img width="963" height="374" alt="Screenshot 2026-05-20 at 8 56 29 PM" src="https://github.com/user-attachments/assets/2a94f12c-d7b1-41ee-aea1-f3e9a3240397" />
 ---
 
 ## Prerequisites
