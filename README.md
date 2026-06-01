@@ -1,3 +1,4 @@
+
 # Claude Session Skill Picker
 
 A pair of [Claude Code](https://claude.ai/code) hooks that pop a **native checkbox dialog** at the start of every session so you can pick which skills to activate. Picks get injected as context on your first message — Claude turns them on before replying.
@@ -16,7 +17,6 @@ No more `/caveman:caveman ultra` typing every session. No terminal UI conflicts.
 | ![macOS dialog](images/mac.png) | ![Windows dialog](images/win.png) |
 
 Same UX both sides — click checkboxes, hit **Activate**.
-
 ---
 
 ## Prerequisites
