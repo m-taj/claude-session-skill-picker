@@ -19,6 +19,7 @@ No more `/caveman:caveman ultra` typing every session. No terminal UI conflicts.
 | ![macOS dialog](images/mac.png) | ![Windows dialog](images/win.png) |
 
 Same UX both sides — click checkboxes, hit **Activate**.
+
 ---
 
 ## Prerequisites
@@ -176,7 +177,7 @@ Remove-Item "$env:USERPROFILE\.claude\hooks\skills-picker-overrides.json"
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Dialog never appears (macOS) | `osascript` blocked by enterprise MDM | Pre-approve `osascript` in your security profile, or test by running the picker manually: `python3 ~/.claude/hooks/skills-picker.py /tmp/test.txt` |
+| Dialog never appears (macOS) | `osascript` blocked by enterprise MDM | Pre-approve `osascript` in your security profile, or test by running the picker manually: `python3 ~/.claude/hooks/skills-picker.py /tmp/test.txt ~/.claude/cache/skills-catalog.json` (the catalog is rebuilt on each new session) |
 | Dialog never appears (Windows) | `python` not on PATH, or sandboxed Microsoft-Store Python | Install Python 3 from python.org (check "Add to PATH"), rerun `install.ps1` |
 | Dialog appears but selections aren't activated | `UserPromptSubmit` hook missing or pointing elsewhere | Open `~/.claude/settings.json`, confirm both `SessionStart` and `UserPromptSubmit` entries reference the scripts |
 | Need to inspect picker errors | Logs at `~/.claude/cache/skills-picker-<session_id>.log` | Open in any editor |
