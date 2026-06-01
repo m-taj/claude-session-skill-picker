@@ -1,124 +1,175 @@
 # Claude Session Skill Picker
 
-A `UserPromptSubmit` hook for [Claude Code](https://claude.ai/code) that pops up a skill selector at the start of each new session. On macOS it shows a native dialog; on other platforms it falls back to a numbered text menu in the terminal.
+A pair of [Claude Code](https://claude.ai/code) hooks that pop a **native checkbox dialog** at the start of every session so you can pick which skills to activate. Picks get injected as context on your first message — Claude turns them on before replying.
 
-![Demo placeholder — screenshot of the native macOS skill picker dialog](./images/demo.png)
+- macOS: native NSAlert with real checkbox accessory view (via JXA + Cocoa, no install)
+- Windows: tkinter checkbox dialog (ships with the python.org installer, no extra install)
+
+No more `/caveman:caveman ultra` typing every session. No terminal UI conflicts. No freezing on startup.
+
+---
+
+## What it looks like
+
+| macOS | Windows |
+|---|---|
+| ![macOS dialog](images/mac.png) | ![Windows dialog](images/win.png) |
+
+Same UX both sides — click checkboxes, hit **Activate**.
 
 ---
 
 ## Prerequisites
 
-- [Claude Code](https://claude.ai/code) installed and configured
-- macOS (for the native dialog) **or** any platform with `/dev/tty` access (for the text fallback)
-- `jq` for the automated installer (`brew install jq`)
+| Platform | Need |
+|---|---|
+| macOS | Python 3 (preinstalled at `/usr/bin/python3` on modern macOS); `jq` for auto-install (`brew install jq`) |
+| Windows | Python 3 from [python.org](https://www.python.org/downloads/) (Microsoft Store builds also work); PowerShell 5+ |
 
 ---
 
 ## Install
 
-### Option A — One-liner (after cloning)
+### macOS
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/claude-session-skill-picker.git
+git clone https://github.com/m-taj/claude-session-skill-picker.git
 cd claude-session-skill-picker
 bash install.sh
 ```
 
-### Option B — Manual (no clone needed)
+### Windows
 
-**1. Create the hooks directory**
-
-```bash
-mkdir -p ~/.claude/hooks
+```powershell
+git clone https://github.com/m-taj/claude-session-skill-picker.git
+cd claude-session-skill-picker
+powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-**2. Download the hook script**
+Both installers do the same three things:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/claude-session-skill-picker/main/startup-skills.sh \
-  -o ~/.claude/hooks/startup-skills.sh
-chmod +x ~/.claude/hooks/startup-skills.sh
-```
+1. Copy `skills-launch.py`, `skills-picker.py`, `skills-inject.py` into `~/.claude/hooks/`
+2. Add a `SessionStart` (async) and a `UserPromptSubmit` (sync) hook entry to `~/.claude/settings.json`
+3. Print next steps
 
-**3. Register the hook in Claude Code settings**
-
-Open `~/.claude/settings.json` (create it if it doesn't exist) and add the following. If `hooks` already exists, merge the `UserPromptSubmit` entry into it.
-
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/startup-skills.sh"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-**4. Verify**
-
-```bash
-cat ~/.claude/hooks/startup-skills.sh | head -5
-```
-
-Start a new Claude Code session — the picker should appear on your first message.
+Start a new Claude Code session — the dialog appears.
 
 ---
 
 ## How it works
 
-1. `UserPromptSubmit` fires when you send any message
-2. The script checks a session marker file (`/tmp/claude_session_skills_<session_id>`) — if it exists the picker is skipped, so it only runs once per session
-3. You select skills from the dialog
-4. The script outputs an activation instruction to stdout, which Claude Code injects into Claude's context before processing your message
-5. Claude activates the selected skills, then handles your original message
+Three small Python scripts wired into two hook events:
+
+```
+session starts
+    └─> SessionStart hook (async)         ── skills-launch.py
+            └─> spawns detached GUI       ── skills-picker.py
+                    └─> writes selection to ~/.claude/cache/skills-pending-<sid>.txt
+        ^ launcher exits in ~45 ms; Claude TUI never blocks
+
+user types first message
+    └─> UserPromptSubmit hook (sync)      ── skills-inject.py
+            └─> reads pending file, emits additionalContext, deletes file
+        ^ ~40 ms; runs once per session, silent thereafter
+
+Claude sees the activation instruction in its context and invokes the
+Skill tool for each pick in parallel before responding.
+```
+
+Key design choices:
+
+- **`SessionStart` with `"async": true`** — hook returns immediately so the Claude Code TUI starts unblocked.
+- **GUI runs in its own OS window** — the picker never touches `/dev/tty` or the Claude Code terminal, so there is no rendering conflict, no curses-vs-TUI fight, no freeze.
+- **Selection delivered via `UserPromptSubmit` injection** — by the time Claude reads its first user prompt, the pending file is either present (inject + delete) or absent (no-op). Either way the inject hook runs in tens of milliseconds.
 
 ---
 
 ## Customize: add or remove skills
 
-Edit `~/.claude/hooks/startup-skills.sh`. The two arrays must stay in sync — `SKILL_DIALOG` holds the display labels, `SKILL_KEYS` holds the skill identifiers Claude receives.
+Edit `~/.claude/hooks/skills-picker.py` — the `SKILLS` list at the top:
 
-```bash
-SKILL_DIALOG=(
-  "caveman full — terse compressed output (~75% fewer tokens)"
-  "my-skill — description shown in the picker"
-  # add more here
-)
-
-SKILL_KEYS=(
-  "caveman full"
-  "my-skill"
-  # matching key for each dialog entry above
-)
+```python
+SKILLS = [
+    ("caveman full",  "terse output (~75% fewer tokens)"),
+    ("claude-api",    "Anthropic SDK / Claude API focus"),
+    ("my-own-skill",  "what it does, shown in the dialog"),
+    # …
+]
 ```
 
-Skill keys must match whatever skill name Claude Code recognizes (e.g. the name you'd type in `/skill-name`).
+Then add a matching entry in `~/.claude/hooks/skills-inject.py` → `ACTIVATION_MAP`:
+
+```python
+ACTIVATION_MAP = {
+    "my-own-skill": ("my-own-skill", None),         # no arg
+    "caveman full": ("caveman:caveman", "full"),    # with arg
+    # …
+}
+```
+
+The first key in the tuple is the skill name Claude invokes via the `Skill` tool; the second is an optional `args` value.
+
+---
+
+## Disable temporarily
+
+Set an environment variable in the shell that launches Claude Code:
+
+```bash
+# macOS / shell
+export CLAUDE_SKILLS_PICKER=off
+
+# Windows PowerShell
+$env:CLAUDE_SKILLS_PICKER = "off"
+```
+
+Both hooks short-circuit when this is `off`, `0`, `false`, or `no`. Unset to re-enable.
 
 ---
 
 ## Uninstall
 
+Delete the scripts and the two hook entries:
+
 ```bash
-rm ~/.claude/hooks/startup-skills.sh
+# macOS
+rm ~/.claude/hooks/skills-launch.py
+rm ~/.claude/hooks/skills-picker.py
+rm ~/.claude/hooks/skills-inject.py
+# then edit ~/.claude/settings.json, remove the SessionStart and UserPromptSubmit
+# entries that reference skills-launch.py / skills-inject.py
 ```
 
-Then remove the `UserPromptSubmit` hook entry from `~/.claude/settings.json`.
+```powershell
+# Windows
+Remove-Item "$env:USERPROFILE\.claude\hooks\skills-launch.py"
+Remove-Item "$env:USERPROFILE\.claude\hooks\skills-picker.py"
+Remove-Item "$env:USERPROFILE\.claude\hooks\skills-inject.py"
+# then edit %USERPROFILE%\.claude\settings.json the same way
+```
 
 ---
 
-## Platform notes
+## Troubleshooting
 
-| Platform | UI |
-|---|---|
-| macOS | Native Cocoa dialog via `osascript` |
-| Linux / Windows WSL | Numbered text menu via `/dev/tty` |
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Dialog never appears (macOS) | `osascript` blocked by enterprise MDM | Pre-approve `osascript` in your security profile, or test by running the picker manually: `python3 ~/.claude/hooks/skills-picker.py /tmp/test.txt` |
+| Dialog never appears (Windows) | `python` not on PATH, or sandboxed Microsoft-Store Python | Install Python 3 from python.org (check "Add to PATH"), rerun `install.ps1` |
+| Dialog appears but selections aren't activated | `UserPromptSubmit` hook missing or pointing elsewhere | Open `~/.claude/settings.json`, confirm both `SessionStart` and `UserPromptSubmit` entries reference the scripts |
+| Need to inspect picker errors | Logs at `~/.claude/cache/skills-picker-<session_id>.log` | Open in any editor |
+| Want to force re-show this session | Delete the marker: `rm ~/.claude/cache/skills-spawned-<sid>.txt`, then send a new prompt | |
 
-The text fallback works by printing a numbered list to the terminal and reading your input. Type a number to toggle that skill on or off, then press Enter to confirm. Type `skip` to activate nothing.
+---
+
+## Why a session-startup picker?
+
+If you keep several Claude Code skills (caveman compression mode, language-specific helpers, security review, etc.) you usually want a couple active per session and the rest dormant. Typing `/skill-name` three times at the start of every session gets tedious; auto-activating everything pollutes the context window.
+
+This hook puts the choice in one click, once, at the right moment — without disturbing the Claude Code TUI.
+
+---
+
+## License
+
+MIT. See [LICENSE](LICENSE) if present, otherwise treat as MIT.
