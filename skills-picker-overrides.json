@@ -1,0 +1,28 @@
+{
+  "include_builtins": [
+    {"name": "claude-api",               "description": "Anthropic SDK / Claude API focus"},
+    {"name": "security-review",          "description": "security audit mode"},
+    {"name": "fewer-permission-prompts", "description": "reduce permission prompts"}
+  ],
+
+  "args": {
+    "caveman:caveman": {
+      "choices": ["lite", "full", "ultra"],
+      "default": "full",
+      "help":    "compression intensity"
+    }
+  },
+
+  "labels": {
+    "caveman:caveman": "caveman  (compression mode)"
+  },
+
+  "hide": [
+    "caveman:caveman-help",
+    "caveman:caveman-stats",
+    "caveman:caveman-review",
+    "caveman:caveman-commit",
+    "caveman:compress",
+    "caveman:cavecrew"
+  ]
+}

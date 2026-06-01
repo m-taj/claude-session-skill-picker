@@ -2,46 +2,61 @@
 """
 Detached skill picker. Opens a GUI dialog in its own window (no terminal contact).
 
-Per-platform strategy (first that works wins):
-  macOS    -> JXA NSAlert with real checkbox accessory view (native, no install)
-              fallback: 'choose from list' (Cmd-click multi-select)
-              fallback: tkinter Checkbutton checklist
-  Windows  -> tkinter Checkbutton checklist (ships with python.org Python)
+Reads a catalog JSON file (built by skills-launch.py) describing skills to offer.
+Writes selections to the pending file (argv[1]) as `name|arg` lines, where `arg`
+is empty if the skill has no args.
 
-Writes selected keys (one per line) to the path passed as argv[1].
+Per-platform strategy (first that works wins):
+  macOS    -> JXA NSAlert: checkbox per skill + popup dropdown when skill has args
+              fallback: 'choose from list' (Cmd-click multi-select, no arg picker)
+              fallback: tkinter checklist
+  Windows  -> tkinter ttk.Checkbutton + ttk.Combobox per row
 """
 
 import os
 import sys
+import json
 import shutil
 import platform
 import subprocess
 
-SKILLS = [
-    ("caveman full",             "terse output (~75% fewer tokens)"),
-    ("caveman lite",             "less verbose, full sentences"),
-    ("caveman ultra",            "max compression, arrows/abbrev"),
-    ("claude-api",               "Anthropic SDK / Claude API focus"),
-    ("compose-skill",            "Jetpack Compose / KMP / CMP"),
-    ("security-review",          "security audit mode"),
-    ("fewer-permission-prompts", "reduce permission prompts"),
-]
+HINT       = "Set CLAUDE_SKILLS_PICKER=off in your shell to disable this dialog."
+DESC_MAX   = 72   # chars of description to show next to the checkbox
 
-KEYS_ONLY = [k for k, _ in SKILLS]
-LABELS    = [f"{k}  -  {d}" for k, d in SKILLS]
+# ── Catalog loading ───────────────────────────────────────────────────────────
 
-HINT = "Set CLAUDE_SKILLS_PICKER=off in your shell to disable this dialog."
+def load_catalog(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return []
+
+def short_desc(d):
+    d = (d or "").strip().splitlines()
+    d = d[0] if d else ""
+    if len(d) > DESC_MAX:
+        d = d[:DESC_MAX - 1].rstrip() + "…"
+    return d
+
+def row_label(entry):
+    desc = short_desc(entry.get("description"))
+    if desc:
+        return f"{entry['label']}  -  {desc}"
+    return entry["label"]
+
+# ── Output ────────────────────────────────────────────────────────────────────
 
 def write_result(path, picks):
+    """picks: list of (name, arg) where arg may be ''"""
     try:
-        with open(path, "w") as f:
-            for p in picks:
-                f.write(p + "\n")
+        with open(path, "w", encoding="utf-8") as f:
+            for name, arg in picks:
+                f.write(f"{name}|{arg}\n")
     except OSError:
         pass
 
-def label_to_key(label):
-    return label.split("  -  ", 1)[0].strip()
+# ── Probes ────────────────────────────────────────────────────────────────────
 
 def tkinter_works():
     code = "import tkinter; r=tkinter.Tk(); r.update(); r.destroy()"
@@ -55,20 +70,21 @@ def tkinter_works():
         return False
 
 def _force_foreground_windows(root):
-    """Pull the tkinter window to the foreground on Windows."""
     if platform.system() != "Windows":
         return
     try:
         import ctypes
         hwnd = root.winfo_id()
-        user32 = ctypes.windll.user32
-        user32.ShowWindow(hwnd, 5)              # SW_SHOW
-        user32.SetForegroundWindow(hwnd)
-        user32.BringWindowToTop(hwnd)
+        u32 = ctypes.windll.user32
+        u32.ShowWindow(hwnd, 5)
+        u32.SetForegroundWindow(hwnd)
+        u32.BringWindowToTop(hwnd)
     except Exception:
         pass
 
-def try_tkinter(pending):
+# ── tkinter picker (Windows primary, Mac last-ditch) ──────────────────────────
+
+def try_tkinter(pending, catalog):
     try:
         import tkinter as tk
         from tkinter import ttk
@@ -78,7 +94,8 @@ def try_tkinter(pending):
     picks = []
     root = tk.Tk()
     root.title("Claude Code - Activate Skills")
-    root.geometry("600x440")
+    n = max(7, len(catalog))
+    root.geometry(f"640x{120 + n * 30}")
 
     try:
         root.lift()
@@ -89,30 +106,44 @@ def try_tkinter(pending):
     except Exception:
         pass
 
-    frame = ttk.Frame(root, padding=14)
-    frame.pack(fill="both", expand=True)
+    outer = ttk.Frame(root, padding=14)
+    outer.pack(fill="both", expand=True)
 
-    ttk.Label(
-        frame,
-        text="Activate skills for this session:",
-        font=("", 13, "bold"),
-    ).pack(anchor="w", pady=(0, 8))
+    ttk.Label(outer, text="Activate skills for this session:",
+              font=("", 13, "bold")).pack(anchor="w", pady=(0, 8))
 
-    vars_ = []
-    for key, desc in SKILLS:
+    rows = []
+    for entry in catalog:
+        row = ttk.Frame(outer)
+        row.pack(anchor="w", fill="x", pady=1)
+
         v = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frame, text=f"{key}  -  {desc}", variable=v).pack(
-            anchor="w", pady=1
-        )
-        vars_.append((key, v))
+        ttk.Checkbutton(row, text=row_label(entry), variable=v).pack(side="left", anchor="w")
 
-    ttk.Label(frame, text=HINT, foreground="#666").pack(anchor="w", pady=(12, 4))
+        combo_var = None
+        if entry.get("args"):
+            args = entry["args"]
+            combo_var = tk.StringVar(value=args.get("default") or (args.get("choices") or [""])[0])
+            ttk.Combobox(
+                row,
+                textvariable=combo_var,
+                values=args.get("choices", []),
+                state="readonly",
+                width=10,
+            ).pack(side="right", padx=(8, 0))
 
-    btns = ttk.Frame(frame)
+        rows.append((entry, v, combo_var))
+
+    ttk.Label(outer, text=HINT, foreground="#666").pack(anchor="w", pady=(12, 4))
+
+    btns = ttk.Frame(outer)
     btns.pack(fill="x", pady=(8, 0))
 
     def on_activate():
-        picks.extend(k for k, v in vars_ if v.get())
+        for entry, v, cv in rows:
+            if v.get():
+                arg = cv.get() if cv is not None else ""
+                picks.append((entry["name"], arg))
         root.destroy()
 
     def on_skip():
@@ -128,22 +159,32 @@ def try_tkinter(pending):
     write_result(pending, picks)
     return True
 
-def try_jxa_mac(pending):
-    """Mac native NSAlert with real checkbox accessory view (JXA + Cocoa)."""
+# ── macOS JXA picker (primary) ────────────────────────────────────────────────
+
+def try_jxa_mac(pending, catalog):
     if not shutil.which("osascript"):
         return False
 
-    import json as _json
-    items_js = _json.dumps(LABELS)
+    rows = []
+    for entry in catalog:
+        rows.append({
+            "name":    entry["name"],
+            "label":   row_label(entry),
+            "choices": (entry.get("args") or {}).get("choices") or [],
+            "default": (entry.get("args") or {}).get("default") or "",
+        })
+
+    payload = json.dumps(rows)
 
     script = """
 ObjC.import('AppKit');
 ObjC.import('Foundation');
 
-var items = %s;
-var rowH = 26;
-var w    = 520;
-var h    = items.length * rowH + 4;
+var rows = %s;
+
+var rowH = 30;
+var w    = 640;
+var h    = rows.length * rowH + 4;
 
 var alert = $.NSAlert.alloc.init;
 alert.messageText     = "Claude Code  -  Activate Skills";
@@ -152,29 +193,56 @@ alert.addButtonWithTitle("Activate");
 alert.addButtonWithTitle("Skip");
 
 var view  = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, w, h));
-var boxes = [];
-for (var i = 0; i < items.length; i++) {
-    var y = h - (i + 1) * rowH;
-    var b = $.NSButton.alloc.initWithFrame($.NSMakeRect(0, y, w, 22));
+var widgets = [];
+
+for (var i = 0; i < rows.length; i++) {
+    var y = h - (i + 1) * rowH + 4;
+    var r = rows[i];
+
+    var hasArgs = r.choices && r.choices.length > 0;
+    var checkW  = hasArgs ? 460 : w;
+
+    var b = $.NSButton.alloc.initWithFrame($.NSMakeRect(0, y, checkW, 22));
     b.setButtonType($.NSSwitchButton);
-    b.title = items[i];
+    b.title = r.label;
     b.state = 0;
     view.addSubview(b);
-    boxes.push(b);
-}
-alert.accessoryView = view;
 
+    var popup = null;
+    if (hasArgs) {
+        popup = $.NSPopUpButton.alloc.initWithFrame($.NSMakeRect(checkW + 8, y - 2, 160, 26));
+        for (var j = 0; j < r.choices.length; j++) {
+            popup.addItemWithTitle(r.choices[j]);
+        }
+        if (r.default) {
+            popup.selectItemWithTitle(r.default);
+        }
+        view.addSubview(popup);
+    }
+
+    widgets.push({checkbox: b, popup: popup, name: r.name});
+}
+
+alert.accessoryView = view;
 $.NSApp.activateIgnoringOtherApps(true);
 var rc = alert.runModal;
 
-var picks = [];
+var out = [];
 if (rc == 1000) {
-    for (var j = 0; j < boxes.length; j++) {
-        if (boxes[j].state == 1) picks.push(items[j]);
+    for (var k = 0; k < widgets.length; k++) {
+        var wgt = widgets[k];
+        if (wgt.checkbox.state == 1) {
+            var arg = "";
+            if (wgt.popup) {
+                var sel = wgt.popup.titleOfSelectedItem;
+                if (sel) arg = ObjC.unwrap(sel);
+            }
+            out.push(wgt.name + "|" + arg);
+        }
     }
 }
-picks.join("\\n");
-""" % (items_js, HINT.replace('"', '\\"'))
+out.join("\\n");
+""" % (payload, HINT.replace('"', '\\"'))
 
     try:
         r = subprocess.run(
@@ -187,23 +255,29 @@ picks.join("\\n");
     if r.returncode != 0:
         return False
 
+    valid_names = {e["name"] for e in catalog}
     picks = []
     for line in r.stdout.splitlines():
         line = line.strip()
-        if not line:
+        if not line or "|" not in line:
             continue
-        k = label_to_key(line)
-        if k in KEYS_ONLY:
-            picks.append(k)
+        name, _, arg = line.partition("|")
+        if name in valid_names:
+            picks.append((name, arg))
     write_result(pending, picks)
     return True
 
-def try_osascript_mac(pending):
-    """Fallback Mac picker: 'choose from list' (Cmd-click multi-select)."""
+# ── macOS fallback: plain choose-from-list ────────────────────────────────────
+
+def try_osascript_mac(pending, catalog):
+    """Fallback Mac picker — Cmd-click multi-select. Ignores arg dropdowns;
+    arg-having skills use their default."""
     if not shutil.which("osascript"):
         return False
 
-    items_lit = "{" + ", ".join('"' + l.replace('"', '\\"') + '"' for l in LABELS) + "}"
+    label_to_name = {row_label(e): e["name"] for e in catalog}
+    default_arg   = {e["name"]: (e.get("args") or {}).get("default", "") for e in catalog}
+    items_lit = "{" + ", ".join('"' + l.replace('"', '\\"') + '"' for l in label_to_name.keys()) + "}"
     script = f'''
 set picks to choose from list {items_lit} ¬
     with title "Claude Code" ¬
@@ -220,52 +294,53 @@ else
 end if
 '''
     try:
-        r = subprocess.run(
-            ["osascript", "-e", script],
-            capture_output=True, text=True, timeout=900,
-        )
+        r = subprocess.run(["osascript", "-e", script],
+                           capture_output=True, text=True, timeout=900)
     except Exception:
         return False
-
     if r.returncode != 0:
         write_result(pending, [])
         return True
-
     picks = []
     for line in r.stdout.splitlines():
         line = line.strip()
-        if not line:
-            continue
-        k = label_to_key(line)
-        if k in KEYS_ONLY:
-            picks.append(k)
+        if line in label_to_name:
+            name = label_to_name[line]
+            picks.append((name, default_arg.get(name, "")))
     write_result(pending, picks)
     return True
 
+# ── Main ──────────────────────────────────────────────────────────────────────
+
 def main():
-    if len(sys.argv) < 2:
+    if len(sys.argv) < 3:
         sys.exit(0)
-    pending = sys.argv[1]
+    pending      = sys.argv[1]
+    catalog_path = sys.argv[2]
+
+    catalog = load_catalog(catalog_path)
+    if not catalog:
+        write_result(pending, [])
+        return
 
     sysname = platform.system()
 
     if sysname == "Darwin":
-        if try_jxa_mac(pending):
+        if try_jxa_mac(pending, catalog):
             return
-        if try_osascript_mac(pending):
+        if try_osascript_mac(pending, catalog):
             return
-        if tkinter_works() and try_tkinter(pending):
+        if tkinter_works() and try_tkinter(pending, catalog):
             return
         write_result(pending, [])
         return
 
     if sysname == "Windows":
-        if tkinter_works() and try_tkinter(pending):
+        if tkinter_works() and try_tkinter(pending, catalog):
             return
         write_result(pending, [])
         return
 
-    # Unsupported OS — write empty result and exit cleanly.
     write_result(pending, [])
 
 if __name__ == "__main__":

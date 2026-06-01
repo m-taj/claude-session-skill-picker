@@ -5,8 +5,10 @@ A pair of [Claude Code](https://claude.ai/code) hooks that pop a **native checkb
 
 - macOS: native NSAlert with real checkbox accessory view (via JXA + Cocoa, no install)
 - Windows: tkinter checkbox dialog (ships with the python.org installer, no extra install)
+- **Auto-discovers** installed user skills and enabled plugin skills every session — install a new skill, it appears next time; uninstall one, it disappears.
+- Skills with multiple modes (e.g. `caveman` has `lite | full | ultra`) get a dropdown next to the checkbox so you pick one and only one.
 
-No more `/caveman:caveman ultra` typing every session. No terminal UI conflicts. No freezing on startup.
+No more `/caveman:caveman ultra` typing every session. No terminal UI conflicts. No freezing on startup. No hardcoded skill list going stale.
 
 ---
 
@@ -18,6 +20,7 @@ No more `/caveman:caveman ultra` typing every session. No terminal UI conflicts.
 | ![Windows dialog](images/win.png) |
 
 Same UX both sides — click checkboxes, hit **Activate**.
+
 ---
 
 ## Prerequisites
@@ -47,11 +50,12 @@ cd claude-session-skill-picker
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-Both installers do the same three things:
+Both installers do the same things:
 
 1. Copy `skills-launch.py`, `skills-picker.py`, `skills-inject.py` into `~/.claude/hooks/`
-2. Add a `SessionStart` (async) and a `UserPromptSubmit` (sync) hook entry to `~/.claude/settings.json`
-3. Print next steps
+2. Copy `skills-picker-overrides.json` into `~/.claude/hooks/` (only on first install — won't clobber your customized one)
+3. Add a `SessionStart` (async) and a `UserPromptSubmit` (sync) hook entry to `~/.claude/settings.json`
+4. Print next steps
 
 Start a new Claude Code session — the dialog appears.
 
@@ -64,9 +68,13 @@ Three small Python scripts wired into two hook events:
 ```
 session starts
     └─> SessionStart hook (async)         ── skills-launch.py
-            └─> spawns detached GUI       ── skills-picker.py
+            ├─ scan ~/.claude/skills/ (user skills)
+            ├─ scan ~/.claude/plugins/cache/<owner>/<plugin>/*/skills/ for each enabled plugin
+            ├─ merge with ~/.claude/hooks/skills-picker-overrides.json
+            ├─ write ~/.claude/cache/skills-catalog.json
+            └─ spawn detached GUI         ── skills-picker.py
                     └─> writes selection to ~/.claude/cache/skills-pending-<sid>.txt
-        ^ launcher exits in ~45 ms; Claude TUI never blocks
+        ^ launcher exits in <100 ms; Claude TUI never blocks
 
 user types first message
     └─> UserPromptSubmit hook (sync)      ── skills-inject.py
@@ -85,30 +93,43 @@ Key design choices:
 
 ---
 
-## Customize: add or remove skills
+## Customize: the overrides file
 
-Edit `~/.claude/hooks/skills-picker.py` — the `SKILLS` list at the top:
+Skill discovery is automatic — install a new user skill or enable a new plugin and it appears in the dialog next session. But some things can't be discovered from disk alone (built-in skills with no on-disk presence; per-skill mode dropdowns; skills you want hidden from the picker). Those go in `~/.claude/hooks/skills-picker-overrides.json`:
 
-```python
-SKILLS = [
-    ("caveman full",  "terse output (~75% fewer tokens)"),
-    ("claude-api",    "Anthropic SDK / Claude API focus"),
-    ("my-own-skill",  "what it does, shown in the dialog"),
-    # …
-]
-```
+```json
+{
+  "include_builtins": [
+    { "name": "claude-api",      "description": "Anthropic SDK / Claude API focus" },
+    { "name": "security-review", "description": "security audit mode" }
+  ],
 
-Then add a matching entry in `~/.claude/hooks/skills-inject.py` → `ACTIVATION_MAP`:
+  "args": {
+    "caveman:caveman": {
+      "choices": ["lite", "full", "ultra"],
+      "default": "full"
+    }
+  },
 
-```python
-ACTIVATION_MAP = {
-    "my-own-skill": ("my-own-skill", None),         # no arg
-    "caveman full": ("caveman:caveman", "full"),    # with arg
-    # …
+  "labels": {
+    "caveman:caveman": "caveman  (compression mode)"
+  },
+
+  "hide": [
+    "caveman:caveman-help",
+    "caveman:caveman-stats"
+  ]
 }
 ```
 
-The first key in the tuple is the skill name Claude invokes via the `Skill` tool; the second is an optional `args` value.
+| Field | Effect |
+|---|---|
+| `include_builtins` | Add skills that don't have an on-disk `SKILL.md` (built-ins shipped by Claude Code itself). |
+| `args` | Show a dropdown next to a skill's checkbox so the user picks one mode. The arg is appended to the Skill tool call. |
+| `labels` | Override the display name for a skill. Useful for `caveman:caveman` → `caveman (compression mode)`. |
+| `hide` | Suppress skills you don't want cluttering the dialog (e.g. utility variants like `caveman:caveman-help`). |
+
+The installer copies a default `skills-picker-overrides.json` into `~/.claude/hooks/` the first time. On reinstall it leaves your customized file alone — delete it if you want the defaults back.
 
 ---
 
@@ -137,6 +158,7 @@ Delete the scripts and the two hook entries:
 rm ~/.claude/hooks/skills-launch.py
 rm ~/.claude/hooks/skills-picker.py
 rm ~/.claude/hooks/skills-inject.py
+rm ~/.claude/hooks/skills-picker-overrides.json
 # then edit ~/.claude/settings.json, remove the SessionStart and UserPromptSubmit
 # entries that reference skills-launch.py / skills-inject.py
 ```
@@ -146,6 +168,7 @@ rm ~/.claude/hooks/skills-inject.py
 Remove-Item "$env:USERPROFILE\.claude\hooks\skills-launch.py"
 Remove-Item "$env:USERPROFILE\.claude\hooks\skills-picker.py"
 Remove-Item "$env:USERPROFILE\.claude\hooks\skills-inject.py"
+Remove-Item "$env:USERPROFILE\.claude\hooks\skills-picker-overrides.json"
 # then edit %USERPROFILE%\.claude\settings.json the same way
 ```
 
@@ -155,7 +178,7 @@ Remove-Item "$env:USERPROFILE\.claude\hooks\skills-inject.py"
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Dialog never appears (macOS) | `osascript` blocked by enterprise MDM | Pre-approve `osascript` in your security profile, or test by running the picker manually: `python3 ~/.claude/hooks/skills-picker.py /tmp/test.txt` |
+| Dialog never appears (macOS) | `osascript` blocked by enterprise MDM | Pre-approve `osascript` in your security profile, or test by running the picker manually: `python3 ~/.claude/hooks/skills-picker.py /tmp/test.txt ~/.claude/cache/skills-catalog.json` (the catalog is rebuilt on each new session) |
 | Dialog never appears (Windows) | `python` not on PATH, or sandboxed Microsoft-Store Python | Install Python 3 from python.org (check "Add to PATH"), rerun `install.ps1` |
 | Dialog appears but selections aren't activated | `UserPromptSubmit` hook missing or pointing elsewhere | Open `~/.claude/settings.json`, confirm both `SessionStart` and `UserPromptSubmit` entries reference the scripts |
 | Need to inspect picker errors | Logs at `~/.claude/cache/skills-picker-<session_id>.log` | Open in any editor |
