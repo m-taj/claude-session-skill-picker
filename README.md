@@ -14,7 +14,8 @@ No more `/caveman:caveman ultra` typing every session. No terminal UI conflicts.
 
 | macOS | Windows |
 |---|---|
-| ![macOS dialog](images/mac.png) | ![Windows dialog](images/win.png) |
+| ![macOS dialog](<img width="867" height="454" alt="Screenshot 2026-06-01 at 2 55 22 PM" src="https://github.com/user-attachments/assets/1ae64e00-51fe-44af-a14b-8b2f865d9c36" />
+) | ![Windows dialog](images/win.png) |
 
 Same UX both sides — click checkboxes, hit **Activate**.
 ---
