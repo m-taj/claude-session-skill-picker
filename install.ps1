@@ -33,13 +33,23 @@ if (-not $PyCmd) {
 }
 Write-Host "  + Python 3 found (invocation: $PyCmd)"
 
-# --- 2. Copy scripts ---------------------------------------------------------
+# --- 2. Copy scripts + overrides ---------------------------------------------
 New-Item -ItemType Directory -Force -Path $HookDir | Out-Null
 foreach ($f in @('skills-launch.py', 'skills-picker.py', 'skills-inject.py')) {
     $src = Join-Path $ScriptDir $f
     $dst = Join-Path $HookDir   $f
     Copy-Item -Force -Path $src -Destination $dst
     Write-Host "  + Installed $dst"
+}
+
+# Overrides file: do NOT overwrite if the user has already customized it.
+$ovrSrc = Join-Path $ScriptDir 'skills-picker-overrides.json'
+$ovrDst = Join-Path $HookDir   'skills-picker-overrides.json'
+if (Test-Path $ovrDst) {
+    Write-Host "  ~ Kept existing $ovrDst (delete it to reinstall the default)"
+} else {
+    Copy-Item -Force -Path $ovrSrc -Destination $ovrDst
+    Write-Host "  + Installed $ovrDst"
 }
 
 # --- 3. Patch settings.json --------------------------------------------------

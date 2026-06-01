@@ -2,8 +2,9 @@
 """
 UserPromptSubmit hook.
 If a pending skill selection file exists for this session, emit an
-additionalContext block telling Claude to activate each skill via the
-Skill tool. Otherwise exit silently with no output.
+additionalContext block telling Claude to activate each picked skill via
+the Skill tool. Pending file format: one `name|arg` line per pick, where
+`arg` is empty for skills that take no arguments.
 Fast path target: < 50 ms.
 """
 
@@ -13,31 +14,6 @@ import sys
 import json
 
 CACHE_DIR = os.path.expanduser("~/.claude/cache")
-
-ACTIVATION_MAP = {
-    "caveman full":             ("caveman:caveman",          "full"),
-    "caveman lite":             ("caveman:caveman",          "lite"),
-    "caveman ultra":            ("caveman:caveman",          "ultra"),
-    "claude-api":               ("claude-api",               None),
-    "compose-skill":            ("compose-skill",            None),
-    "security-review":          ("security-review",          None),
-    "fewer-permission-prompts": ("fewer-permission-prompts", None),
-}
-
-INTENSITY_RANK = {"lite": 1, "full": 2, "ultra": 3}
-
-def resolve_caveman(picks):
-    cavemen = [p for p in picks if p.startswith("caveman ")]
-    if len(cavemen) <= 1:
-        return picks, None
-    chosen = max(cavemen, key=lambda p: INTENSITY_RANK.get(p.split()[1], 0))
-    dropped = [c for c in cavemen if c != chosen]
-    kept = [p for p in picks if not p.startswith("caveman ") or p == chosen]
-    note = ("Multiple caveman intensities were picked ("
-            + ", ".join(c.split()[1] for c in cavemen)
-            + "); using " + chosen.split()[1] + " only, ignoring "
-            + ", ".join(c.split()[1] for c in dropped) + ".")
-    return kept, note
 
 def main():
     raw = sys.stdin.buffer.read().decode("utf-8", errors="replace")
@@ -51,8 +27,8 @@ def main():
         sys.exit(0)
 
     try:
-        with open(pending) as f:
-            picks = [l.strip() for l in f if l.strip()]
+        with open(pending, "r", encoding="utf-8") as f:
+            raw_lines = [l.strip() for l in f if l.strip()]
     except OSError:
         sys.exit(0)
 
@@ -61,20 +37,23 @@ def main():
     except OSError:
         pass
 
-    if not picks:
+    if not raw_lines:
         sys.exit(0)
 
-    picks, note = resolve_caveman(picks)
-
     lines = []
-    for p in picks:
-        if p not in ACTIVATION_MAP:
-            continue
-        skill, arg = ACTIVATION_MAP[p]
-        if arg:
-            lines.append(f'- Skill "{skill}" with args "{arg}"')
+    for entry in raw_lines:
+        if "|" in entry:
+            name, _, arg = entry.partition("|")
         else:
-            lines.append(f'- Skill "{skill}"')
+            name, arg = entry, ""
+        name = name.strip()
+        arg  = arg.strip()
+        if not name:
+            continue
+        if arg:
+            lines.append(f'- Skill "{name}" with args "{arg}"')
+        else:
+            lines.append(f'- Skill "{name}"')
 
     if not lines:
         sys.exit(0)
@@ -84,10 +63,8 @@ def main():
         "invocation per item (parallel calls are fine), BEFORE responding to "
         "the user:\n"
         + "\n".join(lines)
+        + "]"
     )
-    if note:
-        msg += "\n\nNote: " + note
-    msg += "]"
 
     out = {
         "hookSpecificOutput": {

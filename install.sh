@@ -47,13 +47,23 @@ else
     NO_JQ=0
 fi
 
-# ── 2. Copy scripts ───────────────────────────────────────────────────────────
+# ── 2. Copy scripts + overrides ───────────────────────────────────────────────
 mkdir -p "$HOOK_DIR"
 for f in skills-launch.py skills-picker.py skills-inject.py; do
     cp "$SCRIPT_DIR/$f" "$HOOK_DIR/$f"
     chmod +x "$HOOK_DIR/$f"
     echo "  ✓ Installed $HOOK_DIR/$f"
 done
+
+# Overrides file: do NOT overwrite if the user has already customized it.
+OVR_SRC="$SCRIPT_DIR/skills-picker-overrides.json"
+OVR_DST="$HOOK_DIR/skills-picker-overrides.json"
+if [[ -f "$OVR_DST" ]]; then
+    echo "  ~ Kept existing $OVR_DST (delete it to reinstall the default)"
+else
+    cp "$OVR_SRC" "$OVR_DST"
+    echo "  ✓ Installed $OVR_DST"
+fi
 
 # ── 3. Patch settings.json ────────────────────────────────────────────────────
 if [[ "$NO_JQ" == "1" ]]; then
