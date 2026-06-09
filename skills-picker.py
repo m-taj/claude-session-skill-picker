@@ -188,14 +188,12 @@ def try_jxa_mac(pending, catalog):
         })
 
     payload = json.dumps(rows)
-    timeout = timeout_seconds()
 
     script = """
 ObjC.import('AppKit');
 ObjC.import('Foundation');
 
-var rows        = %s;
-var timeoutSec  = %d;
+var rows = %s;
 
 var rowH = 30;
 var w    = 640;
@@ -240,17 +238,6 @@ for (var i = 0; i < rows.length; i++) {
 
 alert.accessoryView = view;
 $.NSApp.activateIgnoringOtherApps(true);
-
-// Idle auto-close: abort the modal after timeoutSec so an unattended picker
-// from a previous Claude Code session can't outlive its parent indefinitely.
-if (timeoutSec > 0) {
-    var mainQ   = $.dispatch_get_main_queue();
-    var deadline = $.dispatch_time($.DISPATCH_TIME_NOW, Math.floor(timeoutSec * 1e9));
-    $.dispatch_after(deadline, mainQ, function() {
-        $.NSApp.abortModal;
-    });
-}
-
 var rc = alert.runModal;
 
 var out = [];
@@ -268,13 +255,22 @@ if (rc == 1000) {
     }
 }
 out.join("\\n");
-""" % (payload, timeout, HINT.replace('"', '\\"'))
+""" % (payload, HINT.replace('"', '\\"'))
+
+    # Idle auto-close: Python kills the osascript subprocess after the timeout,
+    # closing the dialog window. Prevents pickers from prior sessions living
+    # forever in the background.
+    timeout = timeout_seconds()
 
     try:
         r = subprocess.run(
             ["osascript", "-l", "JavaScript", "-e", script],
-            capture_output=True, text=True, timeout=900,
+            capture_output=True, text=True, timeout=timeout,
         )
+    except subprocess.TimeoutExpired:
+        # User didn't engage in time — treat as Skip.
+        write_result(pending, [])
+        return True
     except Exception:
         return False
 
