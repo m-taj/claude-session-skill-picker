@@ -23,6 +23,16 @@ import subprocess
 HINT       = "Set CLAUDE_SKILLS_PICKER=off in your shell to disable this dialog."
 DESC_MAX   = 72   # chars of description to show next to the checkbox
 
+def timeout_seconds():
+    """Idle auto-close timeout. Prevents zombie pickers from prior sessions
+    living forever in the background. Override with CLAUDE_SKILLS_PICKER_TIMEOUT."""
+    raw = os.environ.get("CLAUDE_SKILLS_PICKER_TIMEOUT", "60")
+    try:
+        v = int(raw)
+        return v if v > 0 else 60
+    except ValueError:
+        return 60
+
 # ── Catalog loading ───────────────────────────────────────────────────────────
 
 def load_catalog(path):
@@ -155,6 +165,9 @@ def try_tkinter(pending, catalog):
     root.bind("<Return>", lambda e: on_activate())
     root.bind("<Escape>", lambda e: on_skip())
 
+    # Idle auto-close — prevents zombie pickers from accumulating across sessions.
+    root.after(timeout_seconds() * 1000, root.destroy)
+
     root.mainloop()
     write_result(pending, picks)
     return True
@@ -175,12 +188,14 @@ def try_jxa_mac(pending, catalog):
         })
 
     payload = json.dumps(rows)
+    timeout = timeout_seconds()
 
     script = """
 ObjC.import('AppKit');
 ObjC.import('Foundation');
 
-var rows = %s;
+var rows        = %s;
+var timeoutSec  = %d;
 
 var rowH = 30;
 var w    = 640;
@@ -225,6 +240,17 @@ for (var i = 0; i < rows.length; i++) {
 
 alert.accessoryView = view;
 $.NSApp.activateIgnoringOtherApps(true);
+
+// Idle auto-close: abort the modal after timeoutSec so an unattended picker
+// from a previous Claude Code session can't outlive its parent indefinitely.
+if (timeoutSec > 0) {
+    var mainQ   = $.dispatch_get_main_queue();
+    var deadline = $.dispatch_time($.DISPATCH_TIME_NOW, Math.floor(timeoutSec * 1e9));
+    $.dispatch_after(deadline, mainQ, function() {
+        $.NSApp.abortModal;
+    });
+}
+
 var rc = alert.runModal;
 
 var out = [];
@@ -242,7 +268,7 @@ if (rc == 1000) {
     }
 }
 out.join("\\n");
-""" % (payload, HINT.replace('"', '\\"'))
+""" % (payload, timeout, HINT.replace('"', '\\"'))
 
     try:
         r = subprocess.run(

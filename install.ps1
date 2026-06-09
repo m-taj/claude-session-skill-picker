@@ -11,17 +11,29 @@ Write-Host 'Installing claude-session-skill-picker...'
 
 # --- 1. Find a Python interpreter --------------------------------------------
 function Find-Python {
-    foreach ($cmd in @('py -3', 'python', 'python3')) {
-        $parts = $cmd -split ' '
-        $exe   = $parts[0]
-        if (Get-Command $exe -ErrorAction SilentlyContinue) {
-            try {
-                $out = & $exe $parts[1..($parts.Length-1)] --version 2>&1
-                if ($LASTEXITCODE -eq 0 -and $out -match 'Python 3') {
-                    return $cmd
+    # Prefer 'py' launcher (absolute, always at C:\Windows\py.exe). Fall back to absolute path
+    # of python.exe / python3.exe. Hooks fired by the Claude Code desktop app inherit only
+    # the system PATH, not the user's interactive shell PATH, so absolute paths are required.
+    $candidates = @(
+        @{ Cmd = 'py';      Args = @('-3') },
+        @{ Cmd = 'python';  Args = @()     },
+        @{ Cmd = 'python3'; Args = @()     }
+    )
+    foreach ($c in $candidates) {
+        $found = Get-Command $c.Cmd -ErrorAction SilentlyContinue
+        if (-not $found) { continue }
+        $argsAll = @($c.Args) + @('--version')
+        try {
+            $out = & $found.Source @argsAll 2>&1
+            if ($LASTEXITCODE -eq 0 -and $out -match 'Python 3') {
+                $invocation = if ($c.Args.Count -gt 0) {
+                    "`"$($found.Source)`" $($c.Args -join ' ')"
+                } else {
+                    "`"$($found.Source)`""
                 }
-            } catch {}
-        }
+                return $invocation
+            }
+        } catch {}
     }
     return $null
 }
@@ -66,6 +78,9 @@ if (-not $json.PSObject.Properties['hooks']) {
 
 $launchHookCmd = "$PyCmd `"$HookDir\skills-launch.py`""
 $injectHookCmd = "$PyCmd `"$HookDir\skills-inject.py`""
+
+Write-Host "  + Launch hook command: $launchHookCmd"
+Write-Host "  + Inject hook command: $injectHookCmd"
 
 $launchEntry = [pscustomobject]@{
     matcher = ''
