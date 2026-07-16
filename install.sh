@@ -31,13 +31,13 @@ if ! command -v jq &>/dev/null; then
       "SessionStart": [
         { "matcher": "",
           "hooks": [{ "type": "command",
-                      "command": "python3 ~/.claude/hooks/skills-launch.py",
+                      "command": "$PY $HOOK_DIR/skills-launch.py",
                       "async": true }] }
       ],
       "UserPromptSubmit": [
         { "matcher": "",
           "hooks": [{ "type": "command",
-                      "command": "python3 ~/.claude/hooks/skills-inject.py",
+                      "command": "$PY $HOOK_DIR/skills-inject.py",
                       "timeout": 5 }] }
       ]
     }
@@ -75,18 +75,13 @@ fi
 mkdir -p "$(dirname "$SETTINGS")"
 [[ -f "$SETTINGS" ]] || echo '{}' > "$SETTINGS"
 
-LAUNCH_ENTRY='{
-  "matcher": "",
-  "hooks": [{ "type": "command",
-              "command": "python3 ~/.claude/hooks/skills-launch.py",
-              "async": true }]
-}'
-INJECT_ENTRY='{
-  "matcher": "",
-  "hooks": [{ "type": "command",
-              "command": "python3 ~/.claude/hooks/skills-inject.py",
-              "timeout": 5 }]
-}'
+LAUNCH_CMD="$PY $HOOK_DIR/skills-launch.py"
+INJECT_CMD="$PY $HOOK_DIR/skills-inject.py"
+
+LAUNCH_ENTRY=$(jq -n --arg cmd "$LAUNCH_CMD" \
+    '{matcher: "", hooks: [{type: "command", command: $cmd, async: true}]}')
+INJECT_ENTRY=$(jq -n --arg cmd "$INJECT_CMD" \
+    '{matcher: "", hooks: [{type: "command", command: $cmd, timeout: 5}]}')
 
 UPDATED=$(jq \
     --argjson launch "$LAUNCH_ENTRY" \

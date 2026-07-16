@@ -23,6 +23,16 @@ import subprocess
 HINT       = "Set CLAUDE_SKILLS_PICKER=off in your shell to disable this dialog."
 DESC_MAX   = 72   # chars of description to show next to the checkbox
 
+def timeout_seconds():
+    """Idle auto-close timeout. Prevents zombie pickers from prior sessions
+    living forever in the background. Override with CLAUDE_SKILLS_PICKER_TIMEOUT."""
+    raw = os.environ.get("CLAUDE_SKILLS_PICKER_TIMEOUT", "60")
+    try:
+        v = int(raw)
+        return v if v > 0 else 60
+    except ValueError:
+        return 60
+
 # ── Catalog loading ───────────────────────────────────────────────────────────
 
 def load_catalog(path):
@@ -94,8 +104,14 @@ def try_tkinter(pending, catalog):
     picks = []
     root = tk.Tk()
     root.title("Claude Code - Activate Skills")
-    n = max(7, len(catalog))
-    root.geometry(f"640x{120 + n * 30}")
+
+    # Cap window height so it never overflows the screen, no matter how many
+    # skills the user has installed. Anything past max_rows_visible scrolls.
+    ROW_H            = 30
+    MAX_ROWS_VISIBLE = 12
+    visible_rows     = min(len(catalog), MAX_ROWS_VISIBLE)
+    win_h            = 140 + visible_rows * ROW_H
+    root.geometry(f"640x{win_h}")
 
     try:
         root.lift()
@@ -112,9 +128,21 @@ def try_tkinter(pending, catalog):
     ttk.Label(outer, text="Activate skills for this session:",
               font=("", 13, "bold")).pack(anchor="w", pady=(0, 8))
 
+    # Scrollable region: Canvas + inner Frame + vertical Scrollbar.
+    list_wrap = ttk.Frame(outer)
+    list_wrap.pack(fill="both", expand=True)
+    canvas    = tk.Canvas(list_wrap, borderwidth=0, highlightthickness=0)
+    vscroll   = ttk.Scrollbar(list_wrap, orient="vertical", command=canvas.yview)
+    canvas.configure(yscrollcommand=vscroll.set)
+    canvas.pack(side="left",  fill="both", expand=True)
+    vscroll.pack(side="right", fill="y")
+
+    inner = ttk.Frame(canvas)
+    canvas.create_window((0, 0), window=inner, anchor="nw")
+
     rows = []
     for entry in catalog:
-        row = ttk.Frame(outer)
+        row = ttk.Frame(inner)
         row.pack(anchor="w", fill="x", pady=1)
 
         v = tk.BooleanVar(value=False)
@@ -133,6 +161,16 @@ def try_tkinter(pending, catalog):
             ).pack(side="right", padx=(8, 0))
 
         rows.append((entry, v, combo_var))
+
+    def _on_inner_configure(_):
+        canvas.configure(scrollregion=canvas.bbox("all"))
+    inner.bind("<Configure>", _on_inner_configure)
+
+    def _on_mousewheel(e):
+        canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+    canvas.bind_all("<MouseWheel>", _on_mousewheel)            # Win + Mac
+    canvas.bind_all("<Button-4>",   lambda e: canvas.yview_scroll(-1, "units"))  # Linux
+    canvas.bind_all("<Button-5>",   lambda e: canvas.yview_scroll( 1, "units"))
 
     ttk.Label(outer, text=HINT, foreground="#666").pack(anchor="w", pady=(12, 4))
 
@@ -154,6 +192,9 @@ def try_tkinter(pending, catalog):
 
     root.bind("<Return>", lambda e: on_activate())
     root.bind("<Escape>", lambda e: on_skip())
+
+    # Idle auto-close — prevents zombie pickers from accumulating across sessions.
+    root.after(timeout_seconds() * 1000, root.destroy)
 
     root.mainloop()
     write_result(pending, picks)
@@ -182,9 +223,17 @@ ObjC.import('Foundation');
 
 var rows = %s;
 
-var rowH = 30;
-var w    = 640;
-var h    = rows.length * rowH + 4;
+// Layout: content view holds all rows; if total height exceeds maxViewH the
+// content goes inside an NSScrollView so the dialog stays a reasonable size
+// no matter how many skills are installed.
+var rowH       = 30;
+var w          = 640;
+var contentH   = rows.length * rowH + 4;
+var maxViewH   = 460;
+var viewH      = Math.min(contentH, maxViewH);
+var needScroll = contentH > maxViewH;
+// Reserve room for the vertical scroll bar so checkbox labels don't get clipped.
+var innerW     = needScroll ? (w - 18) : w;
 
 var alert = $.NSAlert.alloc.init;
 alert.messageText     = "Claude Code  -  Activate Skills";
@@ -192,21 +241,21 @@ alert.informativeText = "Tick any skills to activate for this session.\\n%s";
 alert.addButtonWithTitle("Activate");
 alert.addButtonWithTitle("Skip");
 
-var view  = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, w, h));
+var content = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, innerW, contentH));
 var widgets = [];
 
 for (var i = 0; i < rows.length; i++) {
-    var y = h - (i + 1) * rowH + 4;
+    var y = contentH - (i + 1) * rowH + 4;
     var r = rows[i];
 
     var hasArgs = r.choices && r.choices.length > 0;
-    var checkW  = hasArgs ? 460 : w;
+    var checkW  = hasArgs ? (innerW - 180) : innerW;
 
     var b = $.NSButton.alloc.initWithFrame($.NSMakeRect(0, y, checkW, 22));
     b.setButtonType($.NSSwitchButton);
     b.title = r.label;
     b.state = 0;
-    view.addSubview(b);
+    content.addSubview(b);
 
     var popup = null;
     if (hasArgs) {
@@ -217,13 +266,28 @@ for (var i = 0; i < rows.length; i++) {
         if (r.default) {
             popup.selectItemWithTitle(r.default);
         }
-        view.addSubview(popup);
+        content.addSubview(popup);
     }
 
     widgets.push({checkbox: b, popup: popup, name: r.name});
 }
 
-alert.accessoryView = view;
+var accessory;
+if (needScroll) {
+    var scroll = $.NSScrollView.alloc.initWithFrame($.NSMakeRect(0, 0, w, viewH));
+    scroll.hasVerticalScroller   = true;
+    scroll.hasHorizontalScroller = false;
+    scroll.autohidesScrollers    = false;
+    scroll.borderType            = 1;   // NSLineBorder
+    scroll.documentView          = content;
+    // Scroll the content to the top so item 0 is visible on open.
+    scroll.documentView.scrollPoint($.NSMakePoint(0, contentH));
+    accessory = scroll;
+} else {
+    accessory = content;
+}
+
+alert.accessoryView = accessory;
 $.NSApp.activateIgnoringOtherApps(true);
 var rc = alert.runModal;
 
@@ -244,11 +308,20 @@ if (rc == 1000) {
 out.join("\\n");
 """ % (payload, HINT.replace('"', '\\"'))
 
+    # Idle auto-close: Python kills the osascript subprocess after the timeout,
+    # closing the dialog window. Prevents pickers from prior sessions living
+    # forever in the background.
+    timeout = timeout_seconds()
+
     try:
         r = subprocess.run(
             ["osascript", "-l", "JavaScript", "-e", script],
-            capture_output=True, text=True, timeout=900,
+            capture_output=True, text=True, timeout=timeout,
         )
+    except subprocess.TimeoutExpired:
+        # User didn't engage in time — treat as Skip.
+        write_result(pending, [])
+        return True
     except Exception:
         return False
 

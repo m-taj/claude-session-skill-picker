@@ -147,6 +147,12 @@ $env:CLAUDE_SKILLS_PICKER = "off"
 
 Both hooks short-circuit when this is `off`, `0`, `false`, or `no`. Unset to re-enable.
 
+You can also extend the picker's auto-close timeout (default 60 seconds) if you want more time to think:
+
+```bash
+export CLAUDE_SKILLS_PICKER_TIMEOUT=180   # 3 minutes
+```
+
 ---
 
 ## Uninstall
@@ -183,6 +189,33 @@ Remove-Item "$env:USERPROFILE\.claude\hooks\skills-picker-overrides.json"
 | Dialog appears but selections aren't activated | `UserPromptSubmit` hook missing or pointing elsewhere | Open `~/.claude/settings.json`, confirm both `SessionStart` and `UserPromptSubmit` entries reference the scripts |
 | Need to inspect picker errors | Logs at `~/.claude/cache/skills-picker-<session_id>.log` | Open in any editor |
 | Want to force re-show this session | Delete the marker: `rm ~/.claude/cache/skills-spawned-<sid>.txt`, then send a new prompt | |
+| Dialog appears when you wake the laptop, even though you haven't started a new session | Pre-v3.1 pickers were detached and outlived their parent Claude Code session. macOS re-presented their windows on wake. v3.1+ auto-closes the picker after 60 seconds; upgrade and run the zombie cleanup below | |
+| Picker takes >60s to interact with | Auto-close timeout is too short for you | Set `CLAUDE_SKILLS_PICKER_TIMEOUT=180` (or any positive integer in seconds) in your shell |
+
+### Zombie picker cleanup (one-shot, when upgrading from a version before v3.1)
+
+If picker dialogs from old sessions kept piling up before you upgraded, sweep them away once:
+
+```bash
+# macOS / Linux
+pkill -f skills-picker.py
+rm -f ~/.claude/cache/skills-spawned-*.txt \
+      ~/.claude/cache/skills-pending-*.txt \
+      ~/.claude/cache/skills-picker-*.log
+```
+
+```powershell
+# Windows
+Get-Process python* -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -match 'skills-picker.py' } |
+    Stop-Process -Force
+Remove-Item -ErrorAction SilentlyContinue `
+    "$env:USERPROFILE\.claude\cache\skills-spawned-*.txt", `
+    "$env:USERPROFILE\.claude\cache\skills-pending-*.txt", `
+    "$env:USERPROFILE\.claude\cache\skills-picker-*.log"
+```
+
+After v3.1 this is a non-issue — the picker self-destructs after 60 seconds.
 
 ---
 
