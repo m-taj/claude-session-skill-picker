@@ -21,7 +21,19 @@ import platform
 import subprocess
 
 HINT       = "Set CLAUDE_SKILLS_PICKER=off in your shell to disable this dialog."
-DESC_MAX   = 72   # chars of description to show next to the checkbox
+DESC_MAX   = 72   # chars of description to show next to the checkbox, fallback path only
+
+# ── Theme: ctOS / Watch_Dogs-inspired hacker terminal ──────────────────────────
+BG        = "#11161c"   # dark slate (lighter than near-black, keeps some translucency feel)
+FG        = "#d4e8ec"   # cool off-white
+DIM       = "#5a7278"   # muted cyan-gray
+ACCENT    = "#00e5ff"   # primary neon — cyan
+ACCENT2   = "#ff2d78"   # secondary neon — magenta (activate / emphasis)
+SURFACE   = "#171d24"   # buttons, combobox fields — one step lighter than BG
+MONO      = "Consolas" if platform.system() == "Windows" else "Menlo"
+
+PICKER_DIR    = os.path.dirname(os.path.abspath(__file__))
+LOGO_GIF_PATH = os.path.join(PICKER_DIR, "images", "skillpicker-logo.gif")
 
 def timeout_seconds():
     """Idle auto-close timeout. Prevents zombie pickers from prior sessions
@@ -50,10 +62,26 @@ def short_desc(d):
     return d
 
 def row_label(entry):
-    desc = short_desc(entry.get("description"))
+    """Checkbox row text: label + the pre-summarized one-liner from the catalog
+    (skills-launch.py's summarize()). Falls back to a blunt truncation if a
+    catalog built by an older launch script has no `summary` field yet."""
+    desc = entry.get("summary")
+    if desc is None:
+        desc = short_desc(entry.get("description"))
     if desc:
-        return f"{entry['label']}  -  {desc}"
-    return entry["label"]
+        return f"> {entry['label']}  ::  {desc}"
+    return f"> {entry['label']}"
+
+def group_headers(catalog):
+    """Index -> group name, for every row where the group differs from the row before it."""
+    headers = {}
+    prev = None
+    for i, entry in enumerate(catalog):
+        g = entry.get("group")
+        if g and g != prev:
+            headers[i] = g
+        prev = g
+    return headers
 
 # ── Output ────────────────────────────────────────────────────────────────────
 
@@ -94,6 +122,33 @@ def _force_foreground_windows(root):
 
 # ── tkinter picker (Windows primary, Mac last-ditch) ──────────────────────────
 
+def _apply_dark_theme(root):
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")
+    except Exception:
+        pass
+    root.configure(bg=BG, highlightbackground=ACCENT, highlightcolor=ACCENT, highlightthickness=1)
+    style.configure(".", background=BG, foreground=FG)
+    style.configure("TFrame", background=BG)
+    style.configure("TLabel", background=BG, foreground=FG, font=(MONO, 11))
+    style.configure("Title.TLabel", background=BG, foreground=ACCENT, font=(MONO, 14, "bold"))
+    style.configure("Hint.TLabel", background=BG, foreground=DIM, font=(MONO, 9))
+    style.configure("Header.TLabel", background=BG, foreground=ACCENT, font=(MONO, 10, "bold"))
+    style.configure("TCheckbutton", background=BG, foreground=FG, font=(MONO, 11))
+    style.map("TCheckbutton", background=[("active", BG)], foreground=[("active", ACCENT)])
+    style.configure("TButton", background=SURFACE, foreground=FG,
+                    font=(MONO, 10, "bold"), borderwidth=1, relief="solid",
+                    bordercolor=DIM, focusthickness=0, padding=6)
+    style.map("TButton", background=[("active", "#161b1e")])
+    style.configure("Accent.TButton", background=SURFACE, foreground=ACCENT2,
+                    font=(MONO, 10, "bold"), borderwidth=1, relief="solid",
+                    bordercolor=ACCENT2, padding=6)
+    style.map("Accent.TButton", background=[("active", "#1a0a10")])
+    style.configure("TCombobox", fieldbackground=SURFACE, background=SURFACE, foreground=FG,
+                    bordercolor=DIM, arrowcolor=ACCENT)
+    style.configure("Vertical.TScrollbar", background=SURFACE, troughcolor=BG, borderwidth=0)
+
 def try_tkinter(pending, catalog):
     try:
         import tkinter as tk
@@ -103,14 +158,15 @@ def try_tkinter(pending, catalog):
 
     picks = []
     root = tk.Tk()
-    root.title("Claude Code - Activate Skills")
+    root.title("Claude Code — Activate Skills")
+    _apply_dark_theme(root)
 
     # Cap window height so it never overflows the screen, no matter how many
     # skills the user has installed. Anything past max_rows_visible scrolls.
     ROW_H            = 30
     MAX_ROWS_VISIBLE = 12
     visible_rows     = min(len(catalog), MAX_ROWS_VISIBLE)
-    win_h            = 140 + visible_rows * ROW_H
+    win_h            = 170 + visible_rows * ROW_H
     root.geometry(f"640x{win_h}")
 
     try:
@@ -122,16 +178,17 @@ def try_tkinter(pending, catalog):
     except Exception:
         pass
 
-    outer = ttk.Frame(root, padding=14)
+    outer = ttk.Frame(root, padding=16)
     outer.pack(fill="both", expand=True)
 
-    ttk.Label(outer, text="Activate skills for this session:",
-              font=("", 13, "bold")).pack(anchor="w", pady=(0, 8))
+    ttk.Label(outer, text=">> SKILL_ACCESS.SYS", style="Title.TLabel").pack(anchor="w")
+    ttk.Label(outer, text="[ SELECT MODULES FOR THIS SESSION · ENTER=ACTIVATE · ESC=SKIP ]",
+              style="Hint.TLabel").pack(anchor="w", pady=(2, 10))
 
     # Scrollable region: Canvas + inner Frame + vertical Scrollbar.
     list_wrap = ttk.Frame(outer)
     list_wrap.pack(fill="both", expand=True)
-    canvas    = tk.Canvas(list_wrap, borderwidth=0, highlightthickness=0)
+    canvas    = tk.Canvas(list_wrap, borderwidth=0, highlightthickness=0, background=BG)
     vscroll   = ttk.Scrollbar(list_wrap, orient="vertical", command=canvas.yview)
     canvas.configure(yscrollcommand=vscroll.set)
     canvas.pack(side="left",  fill="both", expand=True)
@@ -140,8 +197,13 @@ def try_tkinter(pending, catalog):
     inner = ttk.Frame(canvas)
     canvas.create_window((0, 0), window=inner, anchor="nw")
 
+    headers = group_headers(catalog)
     rows = []
-    for entry in catalog:
+    for i, entry in enumerate(catalog):
+        if i in headers:
+            ttk.Label(inner, text=f"[ {headers[i].upper()} ]", style="Header.TLabel").pack(
+                anchor="w", pady=(8 if i else 0, 2))
+
         row = ttk.Frame(inner)
         row.pack(anchor="w", fill="x", pady=1)
 
@@ -172,7 +234,7 @@ def try_tkinter(pending, catalog):
     canvas.bind_all("<Button-4>",   lambda e: canvas.yview_scroll(-1, "units"))  # Linux
     canvas.bind_all("<Button-5>",   lambda e: canvas.yview_scroll( 1, "units"))
 
-    ttk.Label(outer, text=HINT, foreground="#666").pack(anchor="w", pady=(12, 4))
+    ttk.Label(outer, text=HINT, style="Hint.TLabel").pack(anchor="w", pady=(12, 4))
 
     btns = ttk.Frame(outer)
     btns.pack(fill="x", pady=(8, 0))
@@ -188,7 +250,7 @@ def try_tkinter(pending, catalog):
         root.destroy()
 
     ttk.Button(btns, text="Skip",     command=on_skip).pack(side="right", padx=4)
-    ttk.Button(btns, text="Activate", command=on_activate).pack(side="right")
+    ttk.Button(btns, text="Activate", command=on_activate, style="Accent.TButton").pack(side="right")
 
     root.bind("<Return>", lambda e: on_activate())
     root.bind("<Escape>", lambda e: on_skip())
@@ -207,8 +269,12 @@ def try_jxa_mac(pending, catalog):
         return False
 
     rows = []
-    for entry in catalog:
+    headers = group_headers(catalog)
+    for i, entry in enumerate(catalog):
+        if i in headers:
+            rows.append({"type": "header", "text": headers[i].upper()})
         rows.append({
+            "type":    "skill",
             "name":    entry["name"],
             "label":   row_label(entry),
             "choices": (entry.get("args") or {}).get("choices") or [],
@@ -226,40 +292,87 @@ var rows = %s;
 // Layout: content view holds all rows; if total height exceeds maxViewH the
 // content goes inside an NSScrollView so the dialog stays a reasonable size
 // no matter how many skills are installed.
-var rowH       = 30;
-var w          = 640;
+var rowH       = 26;
+var w          = 720;
+var titleH     = 110;
 var contentH   = rows.length * rowH + 4;
-var maxViewH   = 460;
+var maxViewH   = 420;
 var viewH      = Math.min(contentH, maxViewH);
 var needScroll = contentH > maxViewH;
 // Reserve room for the vertical scroll bar so checkbox labels don't get clipped.
 var innerW     = needScroll ? (w - 18) : w;
 
+var mono     = $.NSFont.fontWithNameSize("Menlo", 12);
+var monoBold = $.NSFont.fontWithNameSize("Menlo-Bold", 12);
+
+var cyan    = $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.0,  0.90, 1.0,  1.0);
+var darkBG  = $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.067, 0.086, 0.11, 0.88);
+
 var alert = $.NSAlert.alloc.init;
-alert.messageText     = "Claude Code  -  Activate Skills";
-alert.informativeText = "Tick any skills to activate for this session.\\n%s";
+alert.messageText     = "";
+alert.informativeText = "%s";
 alert.addButtonWithTitle("Activate");
 alert.addButtonWithTitle("Skip");
+// Blank out the default app/warning icon — the logo image below replaces it.
+alert.icon = $.NSImage.alloc.initWithSize($.NSMakeSize(1, 1));
+// Dark, monospace, terminal-inspired look — native controls (checkboxes,
+// popups, buttons) pick up dark rendering automatically from the appearance.
+alert.window.appearance = $.NSAppearance.appearanceNamed('NSAppearanceNameDarkAqua');
+
+// Outer wrapper: animated logo GIF on top, skill list below. A pre-rendered
+// GIF (NSImageView animates it natively) is far more reliable across macOS
+// versions than a hand-rolled NSTimer/custom-font animation in JXA.
+var outer = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, w, titleH + viewH));
+
+var logoImage = $.NSImage.alloc.initWithContentsOfFile("%s");
+if (logoImage) {
+    var logoW = 470, logoH = 106;
+    var logoX = (w - logoW) / 2;
+    var logoY = viewH + (titleH - logoH) / 2;
+    var logoView = $.NSImageView.alloc.initWithFrame($.NSMakeRect(logoX, logoY, logoW, logoH));
+    logoView.image         = logoImage;
+    logoView.imageScaling  = $.NSImageScaleProportionallyUpOrDown;
+    logoView.animates      = true;
+    outer.addSubview(logoView);
+}
 
 var content = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, innerW, contentH));
+content.wantsLayer = true;
+content.layer.backgroundColor = darkBG.CGColor;
+content.layer.borderWidth     = 1;
+content.layer.borderColor     = cyan.CGColor;
 var widgets = [];
 
 for (var i = 0; i < rows.length; i++) {
     var y = contentH - (i + 1) * rowH + 4;
     var r = rows[i];
 
+    if (r.type === "header") {
+        var h = $.NSTextField.alloc.initWithFrame($.NSMakeRect(8, y + 2, innerW - 8, 18));
+        h.stringValue     = "[ " + r.text + " ]";
+        h.editable        = false;
+        h.bezeled         = false;
+        h.drawsBackground = false;
+        h.font            = monoBold;
+        h.textColor       = cyan;
+        content.addSubview(h);
+        continue;
+    }
+
     var hasArgs = r.choices && r.choices.length > 0;
     var checkW  = hasArgs ? (innerW - 180) : innerW;
 
-    var b = $.NSButton.alloc.initWithFrame($.NSMakeRect(0, y, checkW, 22));
+    var b = $.NSButton.alloc.initWithFrame($.NSMakeRect(8, y, checkW - 8, 22));
     b.setButtonType($.NSSwitchButton);
     b.title = r.label;
+    b.font  = mono;
     b.state = 0;
     content.addSubview(b);
 
     var popup = null;
     if (hasArgs) {
         popup = $.NSPopUpButton.alloc.initWithFrame($.NSMakeRect(checkW + 8, y - 2, 160, 26));
+        popup.font = mono;
         for (var j = 0; j < r.choices.length; j++) {
             popup.addItemWithTitle(r.choices[j]);
         }
@@ -278,7 +391,9 @@ if (needScroll) {
     scroll.hasVerticalScroller   = true;
     scroll.hasHorizontalScroller = false;
     scroll.autohidesScrollers    = false;
-    scroll.borderType            = 1;   // NSLineBorder
+    scroll.borderType            = 0;   // NSNoBorder — the dark content bg is the visual edge
+    scroll.drawsBackground       = true;
+    scroll.backgroundColor       = darkBG;
     scroll.documentView          = content;
     // Scroll the content to the top so item 0 is visible on open.
     scroll.documentView.scrollPoint($.NSMakePoint(0, contentH));
@@ -286,9 +401,11 @@ if (needScroll) {
 } else {
     accessory = content;
 }
+outer.addSubview(accessory);
 
-alert.accessoryView = accessory;
+alert.accessoryView = outer;
 $.NSApp.activateIgnoringOtherApps(true);
+
 var rc = alert.runModal;
 
 var out = [];
@@ -306,7 +423,11 @@ if (rc == 1000) {
     }
 }
 out.join("\\n");
-""" % (payload, HINT.replace('"', '\\"'))
+""" % (
+        payload,
+        f"[ SELECT MODULES FOR THIS SESSION ]\\n{HINT}".replace('"', '\\"'),
+        LOGO_GIF_PATH.replace("\\", "\\\\").replace('"', '\\"'),
+    )
 
     # Idle auto-close: Python kills the osascript subprocess after the timeout,
     # closing the dialog window. Prevents pickers from prior sessions living

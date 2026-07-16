@@ -65,6 +65,11 @@ else
     echo "  ✓ Installed $OVR_DST"
 fi
 
+# Logo assets — the picker loads this GIF relative to its own installed path.
+mkdir -p "$HOOK_DIR/images"
+cp "$SCRIPT_DIR/images/skillpicker-logo.gif" "$HOOK_DIR/images/skillpicker-logo.gif"
+echo "  ✓ Installed $HOOK_DIR/images/skillpicker-logo.gif"
+
 # ── 3. Patch settings.json ────────────────────────────────────────────────────
 if [[ "$NO_JQ" == "1" ]]; then
     echo ""

@@ -145,6 +145,39 @@ def scan_plugin_skills():
                     })
     return skills
 
+# ── Description summarization ─────────────────────────────────────────────────
+
+_BOILERPLATE_RE = [
+    re.compile(r"^this skill (helps?|allows?|lets?)\s*(you|agents?)?\s*", re.IGNORECASE),
+    re.compile(r"^use (this )?(skill )?(whenever|when)\b[^.:]*?[:\-—]\s*", re.IGNORECASE),
+    re.compile(r"^mandatory prerequisite\b[^.:]*?[:\-—]\s*", re.IGNORECASE),
+    re.compile(r"^only use (this )?(skill|when)\b[^.:]*?[:\-—]\s*", re.IGNORECASE),
+]
+
+def summarize(desc, max_len=70):
+    """Heuristic one-line summary: first sentence, boilerplate lead-ins stripped,
+    capped at max_len chars on a word boundary. No LLM call — this runs in the
+    fast session-start hook."""
+    d = (desc or "").strip().replace("\n", " ").replace("**", "")
+    d = re.sub(r"\s+", " ", d)
+    if not d:
+        return ""
+    m = re.search(r"^(.*?[.!?])(\s|$)", d)
+    if m:
+        d = m.group(1)
+    for pat in _BOILERPLATE_RE:
+        stripped = pat.sub("", d)
+        if stripped != d and stripped.strip():
+            d = stripped
+            break
+    d = d.strip().rstrip(".").strip()
+    if len(d) > max_len:
+        cut = d[:max_len]
+        if " " in cut:
+            cut = cut.rsplit(" ", 1)[0]
+        d = cut.rstrip() + "…"
+    return d
+
 # ── Overrides + catalog assembly ──────────────────────────────────────────────
 
 def load_overrides():
@@ -191,12 +224,33 @@ def build_catalog():
             "name":        s["name"],
             "label":       labels.get(s["name"], s["name"]),
             "description": s["description"],
+            "summary":     summarize(s["description"]),
             "args":        args_map.get(s["name"]) or None,
             "source":      s["source"],
+            "group":       _group_for(s["source"]),
         })
 
-    catalog.sort(key=lambda e: (e["source"] != "builtin", e["name"].lower()))
+    # Built-in first, then user skills, then plugins alphabetically by name;
+    # alphabetical by label within each group.
+    def _group_order(g):
+        if g == "Built-in":
+            return (0, "")
+        if g == "Your Skills":
+            return (1, "")
+        return (2, g.lower())
+
+    catalog.sort(key=lambda e: (_group_order(e["group"]), e["label"].lower()))
     return catalog
+
+def _group_for(source):
+    """Map a catalog entry's `source` to the picker's display group."""
+    if source == "builtin":
+        return "Built-in"
+    if source == "user":
+        return "Your Skills"
+    if source.startswith("plugin:"):
+        return source.split(":", 1)[1]
+    return source
 
 # ── Spawn ─────────────────────────────────────────────────────────────────────
 
