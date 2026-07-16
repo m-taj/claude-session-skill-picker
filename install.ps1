@@ -64,6 +64,12 @@ if (Test-Path $ovrDst) {
     Write-Host "  + Installed $ovrDst"
 }
 
+# Logo assets — the picker loads this GIF relative to its own installed path.
+$imgDstDir = Join-Path $HookDir 'images'
+New-Item -ItemType Directory -Force -Path $imgDstDir | Out-Null
+Copy-Item -Force -Path (Join-Path $ScriptDir 'images\skillpicker-logo.gif') -Destination (Join-Path $imgDstDir 'skillpicker-logo.gif')
+Write-Host "  + Installed $(Join-Path $imgDstDir 'skillpicker-logo.gif')"
+
 # --- 3. Patch settings.json --------------------------------------------------
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Settings) | Out-Null
 if (-not (Test-Path $Settings)) {
