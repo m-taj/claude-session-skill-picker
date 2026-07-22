@@ -359,8 +359,19 @@ def cleanup_stale():
     except OSError:
         pass
 
+def _picker_disabled_via_prefs():
+    """UI-editable equivalent of CLAUDE_SKILLS_PICKER=off, set from the
+    Settings panel for users who'd rather not touch their shell profile."""
+    try:
+        with open(os.path.join(CACHE_DIR, "skills-picker-prefs.json"), "r", encoding="utf-8") as f:
+            return bool(json.load(f).get("disabled"))
+    except (OSError, ValueError):
+        return False
+
 def main():
     if os.environ.get("CLAUDE_SKILLS_PICKER", "").lower() in ("off", "0", "false", "no"):
+        sys.exit(0)
+    if _picker_disabled_via_prefs():
         sys.exit(0)
 
     raw = sys.stdin.buffer.read().decode("utf-8", errors="replace")

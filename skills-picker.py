@@ -79,6 +79,33 @@ def save_connected_agents(catalog_path, state):
     except OSError:
         pass
 
+# ── Picker options (disable / timeout) ────────────────────────────────────────
+# UI-editable equivalent of the CLAUDE_SKILLS_PICKER / CLAUDE_SKILLS_PICKER_TIMEOUT
+# env vars, for users who'd rather not touch their shell profile. Env vars still
+# win if set, so scripting/CI use is unaffected.
+PICKER_PREFS_FILENAME = "skills-picker-prefs.json"
+DEFAULT_TIMEOUT = 60
+
+def _picker_prefs_path(catalog_path):
+    return os.path.join(os.path.dirname(os.path.abspath(catalog_path)), PICKER_PREFS_FILENAME)
+
+def load_picker_prefs(catalog_path):
+    try:
+        with open(_picker_prefs_path(catalog_path), "r", encoding="utf-8") as f:
+            data = dict(json.load(f))
+    except (OSError, ValueError):
+        data = {}
+    data.setdefault("disabled", False)
+    data.setdefault("timeout", DEFAULT_TIMEOUT)
+    return data
+
+def save_picker_prefs(catalog_path, prefs):
+    try:
+        with open(_picker_prefs_path(catalog_path), "w", encoding="utf-8") as f:
+            json.dump(prefs, f, indent=2)
+    except OSError:
+        pass
+
 def _load_adapter_module(path):
     """Load an adapter script (adapters/codex.py, adapters/opencode.py — plain
     standalone scripts, not a package) as a Python module by file path."""
@@ -143,15 +170,18 @@ def run_uninstaller():
     subprocess.run(["bash", UNINSTALL_SH], timeout=30, capture_output=True)
     return True
 
-def timeout_seconds():
+def timeout_seconds(catalog_path=None):
     """Idle auto-close timeout. Prevents zombie pickers from prior sessions
-    living forever in the background. Override with CLAUDE_SKILLS_PICKER_TIMEOUT."""
-    raw = os.environ.get("CLAUDE_SKILLS_PICKER_TIMEOUT", "60")
+    living forever in the background. CLAUDE_SKILLS_PICKER_TIMEOUT wins if set
+    (for scripting/CI); otherwise falls back to the Settings-panel value."""
+    raw = os.environ.get("CLAUDE_SKILLS_PICKER_TIMEOUT")
+    if raw is None and catalog_path:
+        raw = load_picker_prefs(catalog_path).get("timeout")
     try:
         v = int(raw)
-        return v if v > 0 else 60
-    except ValueError:
-        return 60
+        return v if v > 0 else DEFAULT_TIMEOUT
+    except (TypeError, ValueError):
+        return DEFAULT_TIMEOUT
 
 # ── Catalog loading ───────────────────────────────────────────────────────────
 
@@ -479,7 +509,7 @@ def try_tkinter(pending, catalog, catalog_path):
     root.bind("<Escape>", lambda e: on_skip())
 
     # Idle auto-close — prevents zombie pickers from accumulating across sessions.
-    root.after(timeout_seconds() * 1000, root.destroy)
+    root.after(timeout_seconds(catalog_path) * 1000, root.destroy)
 
     root.mainloop()
     write_result(pending, picks)
@@ -669,7 +699,7 @@ out.join("\\n");
     # Idle auto-close: Python kills the osascript subprocess after the timeout,
     # closing the dialog window. Prevents pickers from prior sessions living
     # forever in the background.
-    timeout = timeout_seconds()
+    timeout = timeout_seconds(catalog_path)
 
     try:
         r = subprocess.run(
@@ -769,7 +799,7 @@ def open_settings_mac():
 
 # ── macOS fallback: plain choose-from-list ────────────────────────────────────
 
-def try_osascript_mac(pending, catalog):
+def try_osascript_mac(pending, catalog, catalog_path=None):
     """Fallback Mac picker — Cmd-click multi-select. Ignores arg dropdowns;
     arg-having skills use their default."""
     if not shutil.which("osascript"):
@@ -932,6 +962,19 @@ _PAGE_TEMPLATE = Template("""
     <div id="agentList"></div>
     <div class="agent-msg" id="agentMsg"></div>
 
+    <h2>[ PICKER OPTIONS ]</h2>
+    <label class="remember">
+      <input type="checkbox" id="disablePickerChk">
+      Disable this dialog at session start
+    </label>
+    <p class="sub" style="margin-top:8px;">Auto-close after (seconds) — applies next time this dialog opens:</p>
+    <div class="repo-add">
+      <input type="text" id="timeoutInput" style="max-width:80px; flex:none;">
+      <button id="timeoutSaveBtn">Save</button>
+    </div>
+    <p class="sub">Re-enable any time from this same Settings panel — open it via the "Skill Picker Settings" desktop shortcut even while the dialog is disabled.</p>
+    <div class="agent-msg" id="pickerOptsMsg"></div>
+
     <h2>[ SKILL REPOS ]</h2>
     <p class="sub">Add a GitHub repo URL to pull in its skills (SKILL.md at the repo root or a skills/ subdir). Fetched once on add; use Refresh to pull updates.</p>
     <div class="repo-add">
@@ -970,15 +1013,37 @@ document.getElementById('activateBtn').addEventListener('click', () => {
 document.getElementById('skipBtn').addEventListener('click', () => {
   window.pywebview.api.skip();
 });
+function renderPickerOptions() {
+  window.pywebview.api.get_picker_prefs().then(prefs => {
+    document.getElementById('disablePickerChk').checked = !!prefs.disabled;
+    document.getElementById('timeoutInput').value = prefs.timeout;
+  });
+}
 function openSettings() {
   document.getElementById('settingsPanel').classList.add('open');
   renderRepos();
   renderAgents();
+  renderPickerOptions();
 }
 document.getElementById('settingsBtn').addEventListener('click', () => {
   document.getElementById('settingsPanel').classList.toggle('open');
   renderRepos();
   renderAgents();
+  renderPickerOptions();
+});
+document.getElementById('disablePickerChk').addEventListener('change', (e) => {
+  window.pywebview.api.set_picker_disabled(e.target.checked).then(() => {
+    document.getElementById('pickerOptsMsg').textContent = e.target.checked
+      ? 'Dialog disabled — use the desktop shortcut to reopen Settings.'
+      : 'Dialog enabled.';
+  });
+});
+document.getElementById('timeoutSaveBtn').addEventListener('click', () => {
+  const seconds = document.getElementById('timeoutInput').value;
+  window.pywebview.api.set_picker_timeout(seconds).then(prefs => {
+    document.getElementById('timeoutInput').value = prefs.timeout;
+    document.getElementById('pickerOptsMsg').textContent = 'Saved.';
+  });
 });
 if ($open_settings) { window.addEventListener('pywebviewready', openSettings); }
 document.getElementById('settingsCloseBtn').addEventListener('click', () => {
@@ -1171,6 +1236,25 @@ class _PickerApi:
         save_connected_agents(self.catalog_path, state)
         return {"ok": ok, "message": message, "connected": state[agent_id]}
 
+    def get_picker_prefs(self):
+        return load_picker_prefs(self.catalog_path)
+
+    def set_picker_disabled(self, disabled):
+        prefs = load_picker_prefs(self.catalog_path)
+        prefs["disabled"] = bool(disabled)
+        save_picker_prefs(self.catalog_path, prefs)
+        return prefs
+
+    def set_picker_timeout(self, seconds):
+        prefs = load_picker_prefs(self.catalog_path)
+        try:
+            seconds = int(seconds)
+        except (TypeError, ValueError):
+            seconds = DEFAULT_TIMEOUT
+        prefs["timeout"] = seconds if seconds > 0 else DEFAULT_TIMEOUT
+        save_picker_prefs(self.catalog_path, prefs)
+        return prefs
+
     def close_window(self):
         _safe_destroy(self.window)
         return "ok"
@@ -1240,7 +1324,7 @@ def try_pywebview(pending, catalog, catalog_path):
         )
         api.window = window
 
-        timer = threading.Timer(timeout_seconds(), lambda: _safe_destroy(window))
+        timer = threading.Timer(timeout_seconds(catalog_path), lambda: _safe_destroy(window))
         timer.daemon = True
         timer.start()
 
@@ -1274,7 +1358,7 @@ def main():
     if sysname == "Darwin":
         if try_jxa_mac(pending, catalog, catalog_path):
             return
-        if try_osascript_mac(pending, catalog):
+        if try_osascript_mac(pending, catalog, catalog_path):
             return
         if tkinter_works() and try_tkinter(pending, catalog, catalog_path):
             return
