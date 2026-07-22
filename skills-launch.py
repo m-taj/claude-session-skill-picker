@@ -94,6 +94,7 @@ def scan_user_skills():
                 "name":        fm.get("name", name),
                 "description": fm.get("description", "user skill"),
                 "source":      "user",
+                "path":        md,
             })
     return skills
 
@@ -142,6 +143,7 @@ def scan_plugin_skills():
                         "name":        f"{plugin}:{fm.get('name', name)}",
                         "description": fm.get("description", "plugin skill"),
                         "source":      f"plugin:{plugin}",
+                        "path":        md,
                     })
     return skills
 
@@ -228,6 +230,7 @@ def build_catalog():
             "args":        args_map.get(s["name"]) or None,
             "source":      s["source"],
             "group":       _group_for(s["source"]),
+            "path":        s.get("path", ""),
         })
 
     # Built-in first, then user skills, then plugins alphabetically by name;
