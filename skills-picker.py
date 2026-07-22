@@ -27,6 +27,7 @@ import pathlib
 import platform
 import threading
 import subprocess
+import webbrowser
 from string import Template
 
 HINT       = "Set CLAUDE_SKILLS_PICKER=off in your shell to disable this dialog."
@@ -97,12 +98,40 @@ def load_picker_prefs(catalog_path):
         data = {}
     data.setdefault("disabled", False)
     data.setdefault("timeout", DEFAULT_TIMEOUT)
+    data.setdefault("gemini_api_key", "")
+    data.setdefault("suggestions_enabled", True)
     return data
 
 def save_picker_prefs(catalog_path, prefs):
     try:
         with open(_picker_prefs_path(catalog_path), "w", encoding="utf-8") as f:
             json.dump(prefs, f, indent=2)
+    except OSError:
+        pass
+
+# ── Skill suggestions (Gemini, free tier, once/day) ───────────────────────────
+# Computed out-of-process by skills-suggest.py; the picker only ever reads the
+# cache file it writes and marks it seen. See skills-suggest.py for the
+# GEMINI_API_KEY gating and privacy notes.
+SUGGESTIONS_CACHE_FILENAME = "skills-suggestions-cache.json"
+
+def _suggestions_cache_path(catalog_path):
+    return os.path.join(os.path.dirname(os.path.abspath(catalog_path)), SUGGESTIONS_CACHE_FILENAME)
+
+def load_suggestions_cache(catalog_path):
+    try:
+        with open(_suggestions_cache_path(catalog_path), "r", encoding="utf-8") as f:
+            data = dict(json.load(f))
+    except (OSError, ValueError):
+        data = {}
+    data.setdefault("suggestions", [])
+    data.setdefault("seen", True)
+    return data
+
+def save_suggestions_cache(catalog_path, data):
+    try:
+        with open(_suggestions_cache_path(catalog_path), "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
     except OSError:
         pass
 
@@ -930,6 +959,61 @@ _PAGE_TEMPLATE = Template("""
   .agent-row label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
   .agent-row .dim { font-size: 11px; }
   .agent-msg { font-size: 11px; color: $dim; min-height: 14px; margin-top: 4px; }
+  .suggest-btn { position: relative; margin-left: 6px; }
+  .badge {
+    display: none; position: absolute; top: -6px; right: -6px;
+    background: $accent2; color: $bg; border-radius: 8px;
+    font-size: 9px; line-height: 14px; min-width: 14px; text-align: center;
+    padding: 0 3px;
+  }
+  .badge.show { display: block; }
+  #suggestPanel {
+    display: none; position: fixed; inset: 0; background: rgba(10,12,15,0.96);
+    padding: 24px; color: $fg;
+  }
+  #suggestPanel.open { display: block; }
+  #suggestPanel h2 { color: $accent; font-size: 14px; margin-top: 0; }
+  #suggestPanel .sub { color: $dim; font-size: 12px; }
+  .suggest-row {
+    padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.08);
+    display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  }
+  .suggest-row .name { font-size: 13px; }
+  .suggest-row .reason { font-size: 11px; color: $dim; }
+  .suggest-row button { padding: 4px 10px; font-size: 11px; }
+  .suggest-empty { font-size: 12px; color: $dim; }
+  ol.tutorial { margin: 6px 0 10px 0; padding-left: 20px; font-size: 12px; color: $fg; }
+  ol.tutorial li { margin-bottom: 4px; }
+  ol.tutorial button { padding: 3px 8px; font-size: 11px; }
+  .repo-add input[type="password"] {
+    flex: 1; background: $surface; color: $fg; border: 1px solid $dim;
+    border-radius: 3px; font-family: $mono, monospace; font-size: 12px; padding: 6px 8px;
+  }
+  .switch { position: relative; display: inline-block; width: 38px; height: 20px; flex-shrink: 0; cursor: pointer; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .slider {
+    position: absolute; inset: 0; background: $surface; border: 1px solid $dim;
+    border-radius: 20px; transition: .15s;
+  }
+  .switch .slider::before {
+    content: ""; position: absolute; height: 14px; width: 14px; left: 2px; top: 2px;
+    background: $dim; border-radius: 50%; transition: .15s;
+  }
+  .switch input:checked + .slider { background: rgba(0,229,255,0.15); border-color: $accent; }
+  .switch input:checked + .slider::before { transform: translateX(18px); background: $accent; }
+  .switch-row {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 12px; padding: 6px 0;
+  }
+  .tabs { display: flex; gap: 4px; margin: 12px 0 16px 0; border-bottom: 1px solid $dim; }
+  .tab-btn {
+    background: none; border: none; border-radius: 0; color: $dim;
+    font-family: $mono, monospace; font-size: 12px; font-weight: bold;
+    padding: 6px 10px; cursor: pointer; border-bottom: 2px solid transparent;
+  }
+  .tab-btn.active { color: $accent; border-bottom-color: $accent; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
 </style>
 </head>
 <body>
@@ -945,47 +1029,94 @@ _PAGE_TEMPLATE = Template("""
   </label>
 
   <div class="btnrow">
-    <button class="gear" id="settingsBtn">&#9881;</button>
+    <div>
+      <button class="gear" id="settingsBtn">&#9881;</button>
+      <button class="gear suggest-btn" id="suggestBtn" style="display:none;">&#128161;<span class="badge" id="suggestBadge"></span></button>
+    </div>
     <div>
       <button id="skipBtn">Skip</button>
       <button class="accent" id="activateBtn">Activate</button>
     </div>
   </div>
 
+  <div id="suggestPanel">
+    <h2>[ SUGGESTED SKILLS ]</h2>
+    <p class="sub">Based on your usage over the last 30 days, refreshed at most once a day.</p>
+    <div id="suggestList"></div>
+    <div class="btnrow">
+      <div></div>
+      <button id="suggestCloseBtn">Close</button>
+    </div>
+  </div>
+
   <div id="settingsPanel">
     <h2>[ SETTINGS ]</h2>
-    <p>$account</p>
-    <p class="sub">$subscription</p>
 
-    <h2>[ CONNECTED AGENTS ]</h2>
-    <p class="sub">Skills picked here also activate in any connected agent. Only agents detected on this machine can be connected.</p>
-    <div id="agentList"></div>
-    <div class="agent-msg" id="agentMsg"></div>
-
-    <h2>[ PICKER OPTIONS ]</h2>
-    <label class="remember">
-      <input type="checkbox" id="disablePickerChk">
-      Disable this dialog at session start
-    </label>
-    <p class="sub" style="margin-top:8px;">Auto-close after (seconds) — applies next time this dialog opens:</p>
-    <div class="repo-add">
-      <input type="text" id="timeoutInput" style="max-width:80px; flex:none;">
-      <button id="timeoutSaveBtn">Save</button>
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="general">General</button>
+      <button class="tab-btn" data-tab="agents">Agents</button>
+      <button class="tab-btn" data-tab="suggestions">Suggestions</button>
+      <button class="tab-btn" data-tab="repos">Repos</button>
     </div>
-    <p class="sub">Re-enable any time from this same Settings panel — open it via the "Skill Picker Settings" desktop shortcut even while the dialog is disabled.</p>
-    <div class="agent-msg" id="pickerOptsMsg"></div>
 
-    <h2>[ SKILL REPOS ]</h2>
-    <p class="sub">Add a GitHub repo URL to pull in its skills (SKILL.md at the repo root or a skills/ subdir). Fetched once on add; use Refresh to pull updates.</p>
-    <div class="repo-add">
-      <input type="text" id="repoUrlInput" placeholder="https://github.com/owner/repo">
-      <button id="repoAddBtn">Add</button>
+    <div class="tab-content active" data-tab-content="general">
+      <p>$account</p>
+      <p class="sub">$subscription</p>
+
+      <label class="switch-row">
+        <span>Disable this dialog at session start</span>
+        <label class="switch"><input type="checkbox" id="disablePickerChk"><span class="slider"></span></label>
+      </label>
+      <p class="sub" style="margin-top:8px;">Auto-close after (seconds) — applies next time this dialog opens:</p>
+      <div class="repo-add">
+        <input type="text" id="timeoutInput" style="max-width:80px; flex:none;">
+        <button id="timeoutSaveBtn">Save</button>
+      </div>
+      <p class="sub">Re-enable any time from this same Settings panel — open it via the "Skill Picker Settings" desktop shortcut even while the dialog is disabled.</p>
+      <div class="agent-msg" id="pickerOptsMsg"></div>
+
+      <div class="btnrow">
+        <div></div>
+        <button class="accent" id="uninstallBtn">Uninstall&hellip;</button>
+      </div>
     </div>
-    <div class="repo-list" id="repoList"></div>
-    <div class="repo-msg" id="repoMsg"></div>
-    <div class="btnrow">
-      <button id="repoRefreshBtn">Refresh repos</button>
-      <button class="accent" id="uninstallBtn">Uninstall&hellip;</button>
+
+    <div class="tab-content" data-tab-content="agents">
+      <p class="sub">Skills picked here also activate in any connected agent. Only agents detected on this machine can be connected.</p>
+      <div id="agentList"></div>
+      <div class="agent-msg" id="agentMsg"></div>
+    </div>
+
+    <div class="tab-content" data-tab-content="suggestions">
+      <p class="sub">Free, based on your usage over time (last 30 days), refreshed at most once a day. Only skill names and pick counts ever leave this machine — never your conversation or prompt text.</p>
+      <ol class="tutorial">
+        <li>Get a free key (no credit card) — <button id="geminiSignupBtn">Open aistudio.google.com/apikey&hellip;</button></li>
+        <li>Paste it below and click Save.</li>
+        <li>That's it — a &#128161; badge appears next to the gear icon when a suggestion is ready.</li>
+      </ol>
+      <div class="repo-add">
+        <input type="password" id="geminiKeyInput" placeholder="Paste your Gemini API key">
+        <button id="geminiKeySaveBtn">Save</button>
+      </div>
+      <label class="switch-row" style="margin-top:10px;">
+        <span>Enable AI skill suggestions</span>
+        <label class="switch"><input type="checkbox" id="suggestionsEnabledChk"><span class="slider"></span></label>
+      </label>
+      <div class="agent-msg" id="suggestSettingsMsg"></div>
+    </div>
+
+    <div class="tab-content" data-tab-content="repos">
+      <p class="sub">Add a GitHub repo URL to pull in its skills (SKILL.md at the repo root or a skills/ subdir). Fetched once on add; use Refresh to pull updates.</p>
+      <div class="repo-add">
+        <input type="text" id="repoUrlInput" placeholder="https://github.com/owner/repo">
+        <button id="repoAddBtn">Add</button>
+      </div>
+      <div class="repo-list" id="repoList"></div>
+      <div class="repo-msg" id="repoMsg"></div>
+      <div class="btnrow">
+        <button id="repoRefreshBtn">Refresh repos</button>
+        <div></div>
+      </div>
     </div>
 
     <div class="btnrow">
@@ -1019,17 +1150,47 @@ function renderPickerOptions() {
     document.getElementById('timeoutInput').value = prefs.timeout;
   });
 }
+function renderSuggestSettings() {
+  window.pywebview.api.get_suggestion_settings().then(s => {
+    const keyInput = document.getElementById('geminiKeyInput');
+    keyInput.value = '';
+    keyInput.placeholder = s.has_env_key
+      ? 'Using GEMINI_API_KEY from your environment'
+      : (s.has_ui_key ? 'Key saved (hidden) — paste a new one to replace it' : 'Paste your Gemini API key');
+    keyInput.disabled = s.has_env_key;
+    document.getElementById('suggestionsEnabledChk').checked = s.enabled;
+  });
+}
 function openSettings() {
   document.getElementById('settingsPanel').classList.add('open');
   renderRepos();
   renderAgents();
   renderPickerOptions();
+  renderSuggestSettings();
 }
 document.getElementById('settingsBtn').addEventListener('click', () => {
   document.getElementById('settingsPanel').classList.toggle('open');
   renderRepos();
   renderAgents();
   renderPickerOptions();
+  renderSuggestSettings();
+});
+document.getElementById('geminiSignupBtn').addEventListener('click', () => {
+  window.pywebview.api.open_gemini_signup();
+});
+document.getElementById('geminiKeySaveBtn').addEventListener('click', () => {
+  const key = document.getElementById('geminiKeyInput').value;
+  if (!key) { return; }
+  window.pywebview.api.set_gemini_key(key).then(() => {
+    document.getElementById('suggestSettingsMsg').textContent = 'Key saved.';
+    renderSuggestSettings();
+  });
+});
+document.getElementById('suggestionsEnabledChk').addEventListener('change', (e) => {
+  window.pywebview.api.set_suggestions_enabled(e.target.checked).then(() => {
+    document.getElementById('suggestSettingsMsg').textContent = e.target.checked
+      ? 'Suggestions enabled.' : 'Suggestions disabled.';
+  });
 });
 document.getElementById('disablePickerChk').addEventListener('change', (e) => {
   window.pywebview.api.set_picker_disabled(e.target.checked).then(() => {
@@ -1049,6 +1210,71 @@ if ($open_settings) { window.addEventListener('pywebviewready', openSettings); }
 document.getElementById('settingsCloseBtn').addEventListener('click', () => {
   document.getElementById('settingsPanel').classList.remove('open');
 });
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelector('.tab-content[data-tab-content="' + btn.dataset.tab + '"]').classList.add('active');
+  });
+});
+
+function checkSuggestions() {
+  window.pywebview.api.get_suggestions().then(res => {
+    const btn   = document.getElementById('suggestBtn');
+    const badge = document.getElementById('suggestBadge');
+    if (!res.items || res.items.length === 0) {
+      btn.style.display = 'none';
+      return;
+    }
+    btn.style.display = 'inline-block';
+    if (res.unseen) {
+      badge.textContent = String(res.items.length);
+      badge.classList.add('show');
+    } else {
+      badge.classList.remove('show');
+    }
+  });
+}
+function renderSuggestions() {
+  window.pywebview.api.get_suggestions().then(res => {
+    const list = document.getElementById('suggestList');
+    list.innerHTML = '';
+    if (!res.items || res.items.length === 0) {
+      list.innerHTML = '<p class="suggest-empty">No suggestions right now — check back after a bit more usage.</p>';
+      return;
+    }
+    res.items.forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'suggest-row';
+      row.innerHTML =
+        '<div><div class="name">' + item.name + '</div>' +
+        '<div class="reason">' + (item.reason || '') + '</div></div>' +
+        '<button data-name="' + item.name + '">Add</button>';
+      row.querySelector('button').addEventListener('click', (e) => {
+        const cb = document.querySelector('.row input[type=checkbox][data-name="' + item.name + '"]');
+        if (cb) {
+          cb.checked = true;
+          cb.closest('label.row').scrollIntoView({behavior: 'smooth', block: 'center'});
+        }
+        e.target.textContent = 'Added';
+        e.target.disabled = true;
+      });
+      list.appendChild(row);
+    });
+  });
+}
+document.getElementById('suggestBtn').addEventListener('click', () => {
+  document.getElementById('suggestPanel').classList.add('open');
+  renderSuggestions();
+  window.pywebview.api.mark_suggestions_seen().then(() => {
+    document.getElementById('suggestBadge').classList.remove('show');
+  });
+});
+document.getElementById('suggestCloseBtn').addEventListener('click', () => {
+  document.getElementById('suggestPanel').classList.remove('open');
+});
+window.addEventListener('pywebviewready', checkSuggestions);
 document.getElementById('uninstallBtn').addEventListener('click', () => {
   if (confirm('This removes the picker hooks from this machine. Continue?')) {
     window.pywebview.api.uninstall().then(msg => {
@@ -1066,20 +1292,26 @@ function renderAgents() {
       const row = document.createElement('div');
       row.className = 'agent-row';
 
-      const label = document.createElement('label');
+      const left = document.createElement('div');
+      const text = document.createElement('span');
+      text.textContent = agent.label;
+      const status = document.createElement('span');
+      status.className = 'dim';
+      status.textContent = agent.locked ? '  always on'
+        : (agent.detected ? '' : '  not detected on this machine');
+      left.appendChild(text);
+      left.appendChild(status);
+
+      const sw = document.createElement('label');
+      sw.className = 'switch';
       const cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.checked = agent.connected;
       cb.disabled = agent.locked || !agent.detected;
-      const text = document.createElement('span');
-      text.textContent = agent.label;
-      label.appendChild(cb);
-      label.appendChild(text);
-
-      const status = document.createElement('span');
-      status.className = 'dim';
-      status.textContent = agent.locked ? 'always on'
-        : (agent.detected ? '' : 'not detected on this machine');
+      const slider = document.createElement('span');
+      slider.className = 'slider';
+      sw.appendChild(cb);
+      sw.appendChild(slider);
 
       if (!agent.locked && agent.detected) {
         cb.addEventListener('change', () => {
@@ -1093,8 +1325,8 @@ function renderAgents() {
         });
       }
 
-      row.appendChild(label);
-      row.appendChild(status);
+      row.appendChild(left);
+      row.appendChild(sw);
       list.appendChild(row);
     });
   });
@@ -1254,6 +1486,46 @@ class _PickerApi:
         prefs["timeout"] = seconds if seconds > 0 else DEFAULT_TIMEOUT
         save_picker_prefs(self.catalog_path, prefs)
         return prefs
+
+    def get_suggestions(self):
+        data = load_suggestions_cache(self.catalog_path)
+        valid_names = {e["name"] for e in self.catalog}
+        items = [s for s in data["suggestions"] if s.get("name") in valid_names]
+        return {"items": items, "unseen": (not data["seen"]) and bool(items)}
+
+    def mark_suggestions_seen(self):
+        data = load_suggestions_cache(self.catalog_path)
+        data["seen"] = True
+        save_suggestions_cache(self.catalog_path, data)
+        return "ok"
+
+    def get_suggestion_settings(self):
+        prefs = load_picker_prefs(self.catalog_path)
+        env_key = os.environ.get("GEMINI_API_KEY", "")
+        return {
+            "has_env_key":  bool(env_key),
+            "has_ui_key":   bool(prefs.get("gemini_api_key")),
+            "enabled":      bool(prefs.get("suggestions_enabled", True)),
+        }
+
+    def set_gemini_key(self, key):
+        prefs = load_picker_prefs(self.catalog_path)
+        prefs["gemini_api_key"] = (key or "").strip()
+        save_picker_prefs(self.catalog_path, prefs)
+        return self.get_suggestion_settings()
+
+    def set_suggestions_enabled(self, enabled):
+        prefs = load_picker_prefs(self.catalog_path)
+        prefs["suggestions_enabled"] = bool(enabled)
+        save_picker_prefs(self.catalog_path, prefs)
+        return self.get_suggestion_settings()
+
+    def open_gemini_signup(self):
+        try:
+            webbrowser.open("https://aistudio.google.com/apikey")
+        except Exception:
+            pass
+        return "ok"
 
     def close_window(self):
         _safe_destroy(self.window)

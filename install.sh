@@ -49,7 +49,7 @@ fi
 
 # ── 2. Copy scripts + overrides ───────────────────────────────────────────────
 mkdir -p "$HOOK_DIR"
-for f in skills-launch.py skills-picker.py skills-inject.py skills-settings.py; do
+for f in skills-launch.py skills-picker.py skills-inject.py skills-settings.py skills-suggest.py; do
     cp "$SCRIPT_DIR/$f" "$HOOK_DIR/$f"
     chmod +x "$HOOK_DIR/$f"
     echo "  ✓ Installed $HOOK_DIR/$f"
@@ -143,3 +143,23 @@ echo "  ✓ Patched $SETTINGS"
 echo ""
 echo "Done. Start a new Claude Code session to see the skill picker."
 echo "Disable temporarily with: export CLAUDE_SKILLS_PICKER=off"
+
+# ── 4. Optional: AI skill suggestions (free) ──────────────────────────────────
+if [[ -z "${GEMINI_API_KEY:-}" ]]; then
+    echo ""
+    echo "Optional: enable AI skill suggestions (free, no credit card)"
+    echo "  Based on your usage over time, the picker can suggest skills you"
+    echo "  haven't tried yet — a small notification badge shows up next to"
+    echo "  the gear icon when one's ready. Off by default until you add a key:"
+    echo ""
+    echo "    1. Get a free key: https://aistudio.google.com/apikey"
+    echo "       (sign in with any Google account — no billing required)"
+    echo "    2. Add it to your shell profile (~/.zshrc or ~/.bash_profile):"
+    echo "         export GEMINI_API_KEY=\"your-key-here\""
+    echo "    3. Restart your terminal (and Claude Code) so the new session"
+    echo "       inherits it."
+    echo ""
+    echo "  Only skill names and pick counts are ever sent — never your"
+    echo "  conversation or prompt text. Skip this and the feature just stays"
+    echo "  off, silently."
+fi

@@ -47,7 +47,7 @@ Write-Host "  + Python 3 found (invocation: $PyCmd)"
 
 # --- 2. Copy scripts + overrides ---------------------------------------------
 New-Item -ItemType Directory -Force -Path $HookDir | Out-Null
-foreach ($f in @('skills-launch.py', 'skills-picker.py', 'skills-inject.py', 'skills-settings.py')) {
+foreach ($f in @('skills-launch.py', 'skills-picker.py', 'skills-inject.py', 'skills-settings.py', 'skills-suggest.py')) {
     $src = Join-Path $ScriptDir $f
     $dst = Join-Path $HookDir   $f
     Copy-Item -Force -Path $src -Destination $dst
@@ -223,3 +223,23 @@ Write-Host "  + Patched $Settings"
 Write-Host ''
 Write-Host 'Done. Start a new Claude Code session to see the skill picker.'
 Write-Host 'Disable temporarily with:  $env:CLAUDE_SKILLS_PICKER = "off"'
+
+# --- 4. Optional: AI skill suggestions (free) --------------------------------
+if (-not $env:GEMINI_API_KEY) {
+    Write-Host ''
+    Write-Host 'Optional: enable AI skill suggestions (free, no credit card)'
+    Write-Host '  Based on your usage over time, the picker can suggest skills you'
+    Write-Host "  haven't tried yet - a small notification badge shows up next to"
+    Write-Host '  the gear icon when one is ready. Off by default until you add a key:'
+    Write-Host ''
+    Write-Host '    1. Get a free key: https://aistudio.google.com/apikey'
+    Write-Host '       (sign in with any Google account - no billing required)'
+    Write-Host '    2. Set it permanently:'
+    Write-Host '         [Environment]::SetEnvironmentVariable("GEMINI_API_KEY", "your-key-here", "User")'
+    Write-Host '    3. Restart your terminal (and Claude Code) so the new session'
+    Write-Host '       inherits it.'
+    Write-Host ''
+    Write-Host '  Only skill names and pick counts are ever sent - never your'
+    Write-Host '  conversation or prompt text. Skip this and the feature just stays'
+    Write-Host '  off, silently.'
+}

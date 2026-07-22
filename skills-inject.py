@@ -12,8 +12,28 @@ import os
 import re
 import sys
 import json
+from datetime import datetime, timezone
 
-CACHE_DIR = os.path.expanduser("~/.claude/cache")
+CACHE_DIR    = os.path.expanduser("~/.claude/cache")
+HISTORY_FILE = os.path.join(CACHE_DIR, "skills-usage-history.json")
+HISTORY_MAX  = 200  # capped list of {ts, picks: [names]} — never raw prompt text
+
+
+def record_usage(names):
+    try:
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            history = json.load(f)
+        if not isinstance(history, list):
+            history = []
+    except (OSError, ValueError):
+        history = []
+    history.append({"ts": datetime.now(timezone.utc).isoformat(), "picks": names})
+    history = history[-HISTORY_MAX:]
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2)
+    except OSError:
+        pass
 
 def main():
     raw = sys.stdin.buffer.read().decode("utf-8", errors="replace")
@@ -41,6 +61,7 @@ def main():
         sys.exit(0)
 
     lines = []
+    names = []
     for entry in raw_lines:
         if "|" in entry:
             name, _, arg = entry.partition("|")
@@ -50,6 +71,7 @@ def main():
         arg  = arg.strip()
         if not name:
             continue
+        names.append(name)
         if arg:
             lines.append(f'- Skill "{name}" with args "{arg}"')
         else:
@@ -57,6 +79,8 @@ def main():
 
     if not lines:
         sys.exit(0)
+
+    record_usage(names)
 
     msg = (
         "[STARTUP HOOK - Activate these skills now via the Skill tool, one "
