@@ -17,10 +17,12 @@ Strategy (first that works wins, same on both platforms):
 """
 
 import os
+import re
 import sys
 import json
 import html
 import shutil
+import hashlib
 import pathlib
 import platform
 import threading
@@ -149,6 +151,53 @@ def save_state(catalog_path, remember, picks):
         with open(_state_path(catalog_path), "w", encoding="utf-8") as f:
             json.dump(data, f)
     except OSError:
+        pass
+
+# ── User-added GitHub-repo skill sources ──────────────────────────────────────
+# Owned here (not imported from skills-launch.py — these are two independent
+# hook scripts by design, same "no cross-file imports" convention as the
+# remembered-picks state above) since the Settings panel needs to add/remove/
+# refresh sources; skills-launch.py owns the matching scan-into-catalog side.
+REPO_SOURCES_FILENAME = "skills-repo-sources.json"
+
+def _repo_sources_path(catalog_path):
+    return os.path.join(os.path.dirname(os.path.abspath(catalog_path)), REPO_SOURCES_FILENAME)
+
+def load_repo_sources(catalog_path):
+    try:
+        with open(_repo_sources_path(catalog_path), "r", encoding="utf-8") as f:
+            return list(json.load(f).get("repos") or [])
+    except (OSError, ValueError):
+        return []
+
+def save_repo_sources(catalog_path, repos):
+    try:
+        with open(_repo_sources_path(catalog_path), "w", encoding="utf-8") as f:
+            json.dump({"repos": list(repos)}, f, indent=2)
+    except OSError:
+        pass
+
+def _repo_cache_dir(catalog_path, url):
+    cache_dir = os.path.dirname(os.path.abspath(catalog_path))
+    h = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+    return os.path.join(cache_dir, "skill-repos", h)
+
+def fetch_repo(catalog_path, url, refresh=False):
+    """Best-effort shallow clone (or `git pull` if refresh=True and already
+    cloned). Never raises — matches skills-launch.py's identical helper."""
+    if not shutil.which("git"):
+        return
+    dest = _repo_cache_dir(catalog_path, url)
+    try:
+        if os.path.isdir(os.path.join(dest, ".git")):
+            if refresh:
+                subprocess.run(["git", "-C", dest, "pull", "--ff-only"],
+                               capture_output=True, timeout=30)
+        else:
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            subprocess.run(["git", "clone", "--depth", "1", url, dest],
+                           capture_output=True, timeout=30)
+    except Exception:
         pass
 
 # ── Probes ────────────────────────────────────────────────────────────────────
@@ -752,9 +801,22 @@ _PAGE_TEMPLATE = Template("""
     padding: 24px; color: $fg;
   }
   #settingsPanel.open { display: block; }
-  #settingsPanel h2 { color: $accent; font-size: 14px; }
+  #settingsPanel h2 { color: $accent; font-size: 14px; margin-top: 18px; }
+  #settingsPanel h2:first-child { margin-top: 0; }
   #settingsPanel p { font-size: 12px; color: $fg; }
   #settingsPanel .sub { color: $dim; }
+  .repo-add { display: flex; gap: 6px; margin: 6px 0 10px 0; }
+  .repo-add input {
+    flex: 1; background: $surface; color: $fg; border: 1px solid $dim;
+    border-radius: 3px; font-family: $mono, monospace; font-size: 12px; padding: 6px 8px;
+  }
+  .repo-list { max-height: 120px; overflow-y: auto; }
+  .repo-row {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 12px; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .repo-row button { padding: 3px 8px; font-size: 11px; }
+  .repo-msg { font-size: 11px; color: $dim; min-height: 14px; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -781,8 +843,22 @@ _PAGE_TEMPLATE = Template("""
     <h2>[ SETTINGS ]</h2>
     <p>$account</p>
     <p class="sub">$subscription</p>
+
+    <h2>[ SKILL REPOS ]</h2>
+    <p class="sub">Add a GitHub repo URL to pull in its skills (SKILL.md at the repo root or a skills/ subdir). Fetched once on add; use Refresh to pull updates.</p>
+    <div class="repo-add">
+      <input type="text" id="repoUrlInput" placeholder="https://github.com/owner/repo">
+      <button id="repoAddBtn">Add</button>
+    </div>
+    <div class="repo-list" id="repoList"></div>
+    <div class="repo-msg" id="repoMsg"></div>
     <div class="btnrow">
+      <button id="repoRefreshBtn">Refresh repos</button>
       <button class="accent" id="uninstallBtn">Uninstall&hellip;</button>
+    </div>
+
+    <div class="btnrow">
+      <div></div>
       <button id="settingsCloseBtn">Close</button>
     </div>
   </div>
@@ -808,6 +884,7 @@ document.getElementById('skipBtn').addEventListener('click', () => {
 });
 document.getElementById('settingsBtn').addEventListener('click', () => {
   document.getElementById('settingsPanel').classList.toggle('open');
+  renderRepos();
 });
 document.getElementById('settingsCloseBtn').addEventListener('click', () => {
   document.getElementById('settingsPanel').classList.remove('open');
@@ -819,6 +896,44 @@ document.getElementById('uninstallBtn').addEventListener('click', () => {
       window.pywebview.api.close_window();
     });
   }
+});
+
+function renderRepos() {
+  window.pywebview.api.list_repos().then(repos => {
+    const list = document.getElementById('repoList');
+    list.innerHTML = '';
+    repos.forEach(url => {
+      const row = document.createElement('div');
+      row.className = 'repo-row';
+      const label = document.createElement('span');
+      label.textContent = url;
+      const removeBtn = document.createElement('button');
+      removeBtn.textContent = 'Remove';
+      removeBtn.addEventListener('click', () => {
+        window.pywebview.api.remove_repo(url).then(res => {
+          renderRepos();
+          document.getElementById('repoMsg').textContent = 'Removed. Takes effect next session.';
+        });
+      });
+      row.appendChild(label);
+      row.appendChild(removeBtn);
+      list.appendChild(row);
+    });
+  });
+}
+document.getElementById('repoAddBtn').addEventListener('click', () => {
+  const input = document.getElementById('repoUrlInput');
+  window.pywebview.api.add_repo(input.value).then(res => {
+    document.getElementById('repoMsg').textContent = res.message || '';
+    if (res.ok) input.value = '';
+    renderRepos();
+  });
+});
+document.getElementById('repoRefreshBtn').addEventListener('click', () => {
+  document.getElementById('repoMsg').textContent = 'Refreshing…';
+  window.pywebview.api.refresh_repos().then(res => {
+    document.getElementById('repoMsg').textContent = res.message || 'Done.';
+  });
 });
 </script>
 </body>
@@ -866,6 +981,32 @@ class _PickerApi:
         if ran:
             return "Uninstalled. Restart Claude Code to complete."
         return "Uninstaller script not found next to this picker."
+
+    def list_repos(self):
+        return load_repo_sources(self.catalog_path)
+
+    def add_repo(self, url):
+        url = (url or "").strip()
+        if not url:
+            return {"ok": False, "message": "Enter a repo URL first.", "repos": self.list_repos()}
+        repos = load_repo_sources(self.catalog_path)
+        if url in repos:
+            return {"ok": False, "message": "Already added.", "repos": repos}
+        repos.append(url)
+        save_repo_sources(self.catalog_path, repos)
+        fetch_repo(self.catalog_path, url)
+        return {"ok": True, "message": "Added — skills from it appear next session.", "repos": repos}
+
+    def remove_repo(self, url):
+        repos = [r for r in load_repo_sources(self.catalog_path) if r != url]
+        save_repo_sources(self.catalog_path, repos)
+        return {"ok": True, "repos": repos}
+
+    def refresh_repos(self):
+        repos = load_repo_sources(self.catalog_path)
+        for url in repos:
+            fetch_repo(self.catalog_path, url, refresh=True)
+        return {"ok": True, "message": f"Refreshed {len(repos)} repo(s)."}
 
     def close_window(self):
         _safe_destroy(self.window)

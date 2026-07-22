@@ -13,6 +13,8 @@ import re
 import sys
 import json
 import time
+import shutil
+import hashlib
 import platform
 import subprocess
 
@@ -147,6 +149,86 @@ def scan_plugin_skills():
                     })
     return skills
 
+# ── User-added GitHub-repo skill sources ──────────────────────────────────────
+# Deliberately not named skills-picker-*/skills-pending-*/skills-spawned-* — same
+# stale-sweep-avoidance reasoning as STATE_FILENAME in skills-picker.py.
+REPO_SOURCES_FILENAME = "skills-repo-sources.json"
+REPO_CACHE_DIR = os.path.join(CACHE_DIR, "skill-repos")
+
+def _repo_sources_path():
+    return os.path.join(CACHE_DIR, REPO_SOURCES_FILENAME)
+
+def load_repo_sources():
+    try:
+        with open(_repo_sources_path(), "r", encoding="utf-8") as f:
+            return list(json.load(f).get("repos") or [])
+    except (OSError, ValueError):
+        return []
+
+def _repo_cache_dir(url):
+    h = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+    return os.path.join(REPO_CACHE_DIR, h)
+
+def _repo_owner_name(url):
+    """Best-effort "owner/repo" for the picker's group label — falls back to
+    something readable rather than failing on a non-GitHub URL."""
+    m = re.search(r"github\.com[:/]+([^/]+)/([^/.]+?)(?:\.git)?/?$", url.strip())
+    if m:
+        return m.group(1), m.group(2)
+    return "repo", os.path.basename(url.rstrip("/")) or url
+
+def fetch_repo(url, refresh=False):
+    """Best-effort shallow clone (or `git pull` if refresh=True and already
+    cloned) into this repo's cache dir. Never raises — no git, no network,
+    or a bad URL should just mean this source contributes no skills this
+    session, not a broken catalog build."""
+    if not shutil.which("git"):
+        return
+    dest = _repo_cache_dir(url)
+    try:
+        if os.path.isdir(os.path.join(dest, ".git")):
+            if refresh:
+                subprocess.run(["git", "-C", dest, "pull", "--ff-only"],
+                               capture_output=True, timeout=30)
+        else:
+            os.makedirs(REPO_CACHE_DIR, exist_ok=True)
+            subprocess.run(["git", "clone", "--depth", "1", url, dest],
+                           capture_output=True, timeout=30)
+    except Exception:
+        pass
+
+def scan_repo_skills():
+    """Scan every configured repo source for the canonical skill format
+    (a SKILL.md-format file), at the repo root or a skills/ subdir — mirrors
+    Codex's .agents/skills/ layout so one repo works unmodified across every
+    connected agent. Fetches a repo on first sight only; refreshing an
+    already-cloned repo is a separate, explicitly-triggered action (see
+    _PickerApi.refresh_repos in skills-picker.py) — never re-fetched on
+    every session start, to keep this hook fast."""
+    skills = []
+    for url in load_repo_sources():
+        dest = _repo_cache_dir(url)
+        if not os.path.isdir(dest):
+            fetch_repo(url)
+        owner, name = _repo_owner_name(url)
+        for scan_root in (dest, os.path.join(dest, "skills")):
+            if not os.path.isdir(scan_root):
+                continue
+            for entry_name in os.listdir(scan_root):
+                if entry_name.startswith("."):
+                    continue
+                sub = os.path.join(scan_root, entry_name)
+                md  = os.path.join(sub, "SKILL.md")
+                if os.path.isfile(md):
+                    fm = _read_skill_md(md)
+                    skills.append({
+                        "name":        fm.get("name", entry_name),
+                        "description": fm.get("description", "repo skill"),
+                        "source":      f"repo:{owner}/{name}",
+                        "path":        md,
+                    })
+    return skills
+
 # ── Description summarization ─────────────────────────────────────────────────
 
 _BOILERPLATE_RE = [
@@ -197,6 +279,7 @@ def build_catalog():
     discovered = []
     discovered.extend(scan_user_skills())
     discovered.extend(scan_plugin_skills())
+    discovered.extend(scan_repo_skills())
 
     for entry in overrides.get("include_builtins", []) or []:
         if entry.get("name"):
@@ -252,6 +335,8 @@ def _group_for(source):
     if source == "user":
         return "Your Skills"
     if source.startswith("plugin:"):
+        return source.split(":", 1)[1]
+    if source.startswith("repo:"):
         return source.split(":", 1)[1]
     return source
 
