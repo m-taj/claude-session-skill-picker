@@ -6,19 +6,26 @@ Reads a catalog JSON file (built by skills-launch.py) describing skills to offer
 Writes selections to the pending file (argv[1]) as `name|arg` lines, where `arg`
 is empty if the skill has no args.
 
-Per-platform strategy (first that works wins):
-  macOS    -> JXA NSAlert: checkbox per skill + popup dropdown when skill has args
-              fallback: 'choose from list' (Cmd-click multi-select, no arg picker)
-              fallback: tkinter checklist
-  Windows  -> tkinter ttk.Checkbutton + ttk.Combobox per row
+Strategy (first that works wins, same on both platforms):
+  1. pywebview  -> one HTML/CSS/JS UI rendered in a native webview (WKWebView on
+                   macOS, WebView2 on Windows). Primary UI when the optional
+                   `pywebview` package is installed.
+  2. macOS      -> JXA NSAlert: checkbox per skill + popup dropdown when skill has args
+                   fallback: 'choose from list' (Cmd-click multi-select, no arg picker)
+                   fallback: tkinter checklist
+     Windows    -> tkinter ttk.Checkbutton + ttk.Combobox per row
 """
 
 import os
 import sys
 import json
+import html
 import shutil
+import pathlib
 import platform
+import threading
 import subprocess
+from string import Template
 
 HINT       = "Set CLAUDE_SKILLS_PICKER=off in your shell to disable this dialog."
 DESC_MAX   = 72   # chars of description to show next to the checkbox, fallback path only
@@ -32,8 +39,31 @@ ACCENT2   = "#ff2d78"   # secondary neon — magenta (activate / emphasis)
 SURFACE   = "#171d24"   # buttons, combobox fields — one step lighter than BG
 MONO      = "Consolas" if platform.system() == "Windows" else "Menlo"
 
-PICKER_DIR    = os.path.dirname(os.path.abspath(__file__))
-LOGO_GIF_PATH = os.path.join(PICKER_DIR, "images", "skillpicker-logo.gif")
+PICKER_DIR     = os.path.dirname(os.path.abspath(__file__))
+LOGO_GIF_PATH  = os.path.join(PICKER_DIR, "images", "skillpicker-logo.gif")
+UNINSTALL_SH   = os.path.join(PICKER_DIR, "uninstall.sh")
+UNINSTALL_PS1  = os.path.join(PICKER_DIR, "uninstall.ps1")
+
+# No accounts/billing system exists yet (see project plan) — these are placeholder
+# strings so the Settings panel's layout is already right when that ships.
+ACCOUNT_LINE      = "Account: Not signed in"
+SUBSCRIPTION_LINE = "Subscription: Free (beta) — accounts & billing are coming in a future update."
+
+def run_uninstaller():
+    """Best-effort: run the platform uninstaller if it was installed alongside this
+    script. Returns True if it ran, False if the uninstaller file wasn't found."""
+    if platform.system() == "Windows":
+        if not os.path.isfile(UNINSTALL_PS1):
+            return False
+        subprocess.run(
+            ["powershell", "-ExecutionPolicy", "Bypass", "-File", UNINSTALL_PS1],
+            timeout=30, capture_output=True,
+        )
+        return True
+    if not os.path.isfile(UNINSTALL_SH):
+        return False
+    subprocess.run(["bash", UNINSTALL_SH], timeout=30, capture_output=True)
+    return True
 
 def timeout_seconds():
     """Idle auto-close timeout. Prevents zombie pickers from prior sessions
@@ -179,7 +209,7 @@ def _apply_dark_theme(root):
 def try_tkinter(pending, catalog, catalog_path):
     try:
         import tkinter as tk
-        from tkinter import ttk
+        from tkinter import ttk, messagebox
     except Exception:
         return False
 
@@ -270,8 +300,41 @@ def try_tkinter(pending, catalog, catalog_path):
 
     ttk.Label(outer, text=HINT, style="Hint.TLabel").pack(anchor="w", pady=(8, 4))
 
+    def open_settings():
+        win = tk.Toplevel(root)
+        win.title("Settings")
+        win.configure(bg=BG, highlightbackground=ACCENT, highlightthickness=1)
+        win.transient(root)
+        pane = ttk.Frame(win, padding=16)
+        pane.pack(fill="both", expand=True)
+
+        ttk.Label(pane, text="[ SETTINGS ]", style="Header.TLabel").pack(anchor="w")
+        ttk.Label(pane, text=ACCOUNT_LINE).pack(anchor="w", pady=(10, 2))
+        ttk.Label(pane, text=SUBSCRIPTION_LINE, wraplength=360, justify="left").pack(anchor="w")
+
+        def do_uninstall():
+            if not messagebox.askyesno(
+                "Uninstall Skill Picker?",
+                "This removes the picker hooks from this machine. Continue?",
+            ):
+                return
+            ran = run_uninstaller()
+            if ran:
+                messagebox.showinfo("Skill Picker", "Uninstalled. Restart Claude Code to complete.")
+            else:
+                messagebox.showwarning("Skill Picker", "Uninstaller script not found next to this picker.")
+            win.destroy()
+            root.destroy()
+
+        action_row = ttk.Frame(pane)
+        action_row.pack(fill="x", pady=(16, 0))
+        ttk.Button(action_row, text="Uninstall…", command=do_uninstall,
+                   style="Accent.TButton").pack(side="left")
+        ttk.Button(action_row, text="Close", command=win.destroy).pack(side="left", padx=(8, 0))
+
     btns = ttk.Frame(outer)
     btns.pack(fill="x", pady=(8, 0))
+    ttk.Button(btns, text="⚙", width=3, command=open_settings).pack(side="left")
 
     def on_activate():
         for entry, v, cv in rows:
@@ -353,6 +416,7 @@ alert.messageText     = "";
 alert.informativeText = "%s";
 alert.addButtonWithTitle("Activate");
 alert.addButtonWithTitle("Skip");
+alert.addButtonWithTitle("⚙ Settings");
 // Blank out the default app/warning icon — the logo image below replaces it.
 alert.icon = $.NSImage.alloc.initWithSize($.NSMakeSize(1, 1));
 // Native "remember this choice" affordance — no custom widget needed.
@@ -466,6 +530,8 @@ if (rc == 1000) {
             out.push(wgt.name + "|" + arg);
         }
     }
+} else if (rc == 1002) {
+    out.push("__SETTINGS__");
 }
 out.join("\\n");
 """ % (
@@ -495,10 +561,16 @@ out.join("\\n");
     if r.returncode != 0:
         return False
 
+    lines = r.stdout.splitlines()
+    if any(line.strip() == "__SETTINGS__" for line in lines):
+        open_settings_mac()
+        write_result(pending, [])
+        return True
+
     valid_names = {e["name"] for e in catalog}
     remember = None
     picks = []
-    for line in r.stdout.splitlines():
+    for line in lines:
         line = line.strip()
         if not line:
             continue
@@ -514,6 +586,61 @@ out.join("\\n");
     if remember is not None:
         save_state(catalog_path, remember, dict(picks))
     return True
+
+def _mac_alert(message_text, informative_text, buttons, timeout=120):
+    """Run a plain NSAlert (no accessory view) with the given buttons.
+    Returns the button title clicked, or None on error/timeout."""
+    btn_calls = "".join(f'alert.addButtonWithTitle("{b}");\n' for b in buttons)
+    script = """
+ObjC.import('AppKit');
+var alert = $.NSAlert.alloc.init;
+alert.messageText = "%s";
+alert.informativeText = "%s";
+%s
+alert.window.appearance = $.NSAppearance.appearanceNamed('NSAppearanceNameDarkAqua');
+$.NSApp.activateIgnoringOtherApps(true);
+var rc = alert.runModal;
+(rc - 1000);
+""" % (
+        message_text.replace('"', '\\"'),
+        informative_text.replace('"', '\\"'),
+        btn_calls,
+    )
+    try:
+        r = subprocess.run(["osascript", "-l", "JavaScript", "-e", script],
+                           capture_output=True, text=True, timeout=timeout)
+    except Exception:
+        return None
+    try:
+        idx = int(r.stdout.strip())
+    except ValueError:
+        return None
+    if 0 <= idx < len(buttons):
+        return buttons[idx]
+    return None
+
+def open_settings_mac():
+    """Settings > Uninstall flow as a short sequence of native alerts — simpler and
+    more reliable than wiring live click handlers into the same modal session."""
+    choice = _mac_alert(
+        "Skill Picker — Settings",
+        f"{ACCOUNT_LINE}\\n{SUBSCRIPTION_LINE}",
+        ["Uninstall…", "Close"],
+    )
+    if choice != "Uninstall…":
+        return
+    confirm = _mac_alert(
+        "Uninstall Skill Picker?",
+        "This removes the picker hooks from this machine. This can't be undone from here.",
+        ["Uninstall", "Cancel"],
+    )
+    if confirm != "Uninstall":
+        return
+    ran = run_uninstaller()
+    if ran:
+        _mac_alert("Skill Picker", "Uninstalled. Restart Claude Code to complete.", ["OK"])
+    else:
+        _mac_alert("Skill Picker", "Uninstaller script not found next to this picker.", ["OK"])
 
 # ── macOS fallback: plain choose-from-list ────────────────────────────────────
 
@@ -558,6 +685,269 @@ end if
     write_result(pending, picks)
     return True
 
+# ── pywebview picker (prototype — one HTML/CSS/JS UI, both platforms) ────────
+# Renders the dialog as real HTML/CSS in a native webview (WKWebView on macOS,
+# WebView2 on Windows) instead of NSAlert/tkinter widgets. Full design control
+# (fonts, layout, in-page settings panel) from one shared implementation instead
+# of maintaining separate JXA and tkinter code paths. Optional dependency —
+# falls back automatically to the existing pickers if `webview` isn't installed
+# or the platform webview runtime isn't available (e.g. WebView2 missing).
+
+_PAGE_TEMPLATE = Template("""
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px;
+    background: $bg; color: $fg;
+    font-family: $mono, monospace;
+    -webkit-user-select: none; user-select: none;
+    overflow: hidden;
+  }
+  .logo-wrap { text-align: center; margin-bottom: 8px; }
+  .logo-wrap img { max-width: 380px; }
+  h1 {
+    color: $accent; font-size: 15px; letter-spacing: 1px;
+    margin: 0 0 4px 0;
+  }
+  .hint { color: $dim; font-size: 11px; margin: 0 0 14px 0; }
+  .list {
+    background: rgba(0,0,0,0.25); border: 1px solid $accent;
+    border-radius: 4px; padding: 10px 12px;
+    max-height: 340px; overflow-y: auto;
+  }
+  .hdr {
+    color: $accent; font-weight: bold; font-size: 12px;
+    margin: 10px 0 4px 0;
+  }
+  .hdr:first-child { margin-top: 0; }
+  label.row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 2px; cursor: pointer; font-size: 13px;
+  }
+  label.row:hover { color: $accent; }
+  .rowlabel { flex: 1; }
+  .dim { color: $dim; }
+  select {
+    background: $surface; color: $fg; border: 1px solid $dim;
+    border-radius: 3px; font-family: $mono, monospace; font-size: 12px;
+  }
+  .remember {
+    margin-top: 12px; font-size: 12px; display: flex; align-items: center; gap: 6px;
+    cursor: pointer;
+  }
+  .btnrow { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; }
+  button {
+    font-family: $mono, monospace; font-weight: bold; font-size: 12px;
+    background: $surface; color: $fg; border: 1px solid $dim;
+    border-radius: 4px; padding: 7px 14px; cursor: pointer;
+  }
+  button.accent { color: $accent2; border-color: $accent2; }
+  button.gear { padding: 7px 10px; }
+  #settingsPanel {
+    display: none; position: fixed; inset: 0; background: rgba(10,12,15,0.96);
+    padding: 24px; color: $fg;
+  }
+  #settingsPanel.open { display: block; }
+  #settingsPanel h2 { color: $accent; font-size: 14px; }
+  #settingsPanel p { font-size: 12px; color: $fg; }
+  #settingsPanel .sub { color: $dim; }
+</style>
+</head>
+<body>
+  <div class="logo-wrap"><img src="$logo_uri"></div>
+  <h1>&gt;&gt; SKILL_ACCESS.SYS</h1>
+  <p class="hint">[ SELECT MODULES FOR THIS SESSION ]  ·  $hint</p>
+
+  <div class="list">$rows</div>
+
+  <label class="remember">
+    <input type="checkbox" id="rememberChk" $remember_checked>
+    Auto-select these picks next session
+  </label>
+
+  <div class="btnrow">
+    <button class="gear" id="settingsBtn">&#9881;</button>
+    <div>
+      <button id="skipBtn">Skip</button>
+      <button class="accent" id="activateBtn">Activate</button>
+    </div>
+  </div>
+
+  <div id="settingsPanel">
+    <h2>[ SETTINGS ]</h2>
+    <p>$account</p>
+    <p class="sub">$subscription</p>
+    <div class="btnrow">
+      <button class="accent" id="uninstallBtn">Uninstall&hellip;</button>
+      <button id="settingsCloseBtn">Close</button>
+    </div>
+  </div>
+
+<script>
+function collectPicks() {
+  const picks = [];
+  document.querySelectorAll('.row input[type=checkbox]').forEach(cb => {
+    if (cb.checked) {
+      const name = cb.dataset.name;
+      const sel = document.querySelector('select[data-name="' + name + '"]');
+      picks.push({name: name, arg: sel ? sel.value : ""});
+    }
+  });
+  return picks;
+}
+document.getElementById('activateBtn').addEventListener('click', () => {
+  const remember = document.getElementById('rememberChk').checked;
+  window.pywebview.api.activate(collectPicks(), remember);
+});
+document.getElementById('skipBtn').addEventListener('click', () => {
+  window.pywebview.api.skip();
+});
+document.getElementById('settingsBtn').addEventListener('click', () => {
+  document.getElementById('settingsPanel').classList.toggle('open');
+});
+document.getElementById('settingsCloseBtn').addEventListener('click', () => {
+  document.getElementById('settingsPanel').classList.remove('open');
+});
+document.getElementById('uninstallBtn').addEventListener('click', () => {
+  if (confirm('This removes the picker hooks from this machine. Continue?')) {
+    window.pywebview.api.uninstall().then(msg => {
+      alert(msg);
+      window.pywebview.api.close_window();
+    });
+  }
+});
+</script>
+</body>
+</html>
+""")
+
+def _file_uri(path):
+    try:
+        return pathlib.Path(path).as_uri()
+    except Exception:
+        return ""
+
+def _safe_destroy(window):
+    try:
+        window.destroy()
+    except Exception:
+        pass
+
+class _PickerApi:
+    """Exposed to the page as window.pywebview.api.<method>(...)."""
+    def __init__(self, catalog, pending, catalog_path):
+        self.catalog      = catalog
+        self.pending      = pending
+        self.catalog_path = catalog_path
+        self.done         = False
+        self.window       = None
+
+    def activate(self, picks, remember):
+        valid_names = {e["name"] for e in self.catalog}
+        clean = [(p.get("name"), p.get("arg") or "") for p in (picks or []) if p.get("name") in valid_names]
+        write_result(self.pending, clean)
+        save_state(self.catalog_path, bool(remember), dict(clean))
+        self.done = True
+        _safe_destroy(self.window)
+        return "ok"
+
+    def skip(self):
+        write_result(self.pending, [])
+        self.done = True
+        _safe_destroy(self.window)
+        return "ok"
+
+    def uninstall(self):
+        ran = run_uninstaller()
+        if ran:
+            return "Uninstalled. Restart Claude Code to complete."
+        return "Uninstaller script not found next to this picker."
+
+    def close_window(self):
+        _safe_destroy(self.window)
+        return "ok"
+
+def _pywebview_row_html(entry, prior_picks):
+    args        = entry.get("args") or {}
+    choices     = args.get("choices") or []
+    prior_arg   = prior_picks.get(entry["name"])
+    default_arg = prior_arg if prior_arg is not None else (args.get("default") or (choices[0] if choices else ""))
+    checked     = "checked" if entry["name"] in prior_picks else ""
+    desc        = entry.get("summary") or short_desc(entry.get("description"))
+    name_esc    = html.escape(entry["name"])
+
+    select_html = ""
+    if choices:
+        opts = "".join(
+            '<option value="%s" %s>%s</option>' % (
+                html.escape(c), "selected" if c == default_arg else "", html.escape(c),
+            )
+            for c in choices
+        )
+        select_html = '<select data-name="%s">%s</select>' % (name_esc, opts)
+
+    return (
+        '<label class="row">'
+        '<input type="checkbox" data-name="%s" %s>'
+        '<span class="rowlabel">&gt; %s <span class="dim">::</span> %s</span>'
+        '%s'
+        '</label>'
+    ) % (name_esc, checked, html.escape(entry["label"]), html.escape(desc), select_html)
+
+def try_pywebview(pending, catalog, catalog_path):
+    try:
+        import webview
+    except Exception:
+        return False
+
+    remember_prev, prior_picks = load_state(catalog_path)
+    headers = group_headers(catalog)
+
+    parts = []
+    for i, entry in enumerate(catalog):
+        if i in headers:
+            parts.append('<div class="hdr">[ %s ]</div>' % html.escape(headers[i].upper()))
+        parts.append(_pywebview_row_html(entry, prior_picks))
+
+    page = _PAGE_TEMPLATE.substitute(
+        bg=BG, fg=FG, dim=DIM, accent=ACCENT, accent2=ACCENT2, surface=SURFACE, mono=MONO,
+        logo_uri=_file_uri(LOGO_GIF_PATH),
+        hint=html.escape(HINT),
+        rows="".join(parts),
+        remember_checked="checked" if remember_prev else "",
+        account=html.escape(ACCOUNT_LINE),
+        subscription=html.escape(SUBSCRIPTION_LINE),
+    )
+
+    api = _PickerApi(catalog, pending, catalog_path)
+
+    try:
+        window = webview.create_window(
+            "Claude Code — Activate Skills",
+            html=page,
+            js_api=api,
+            width=760, height=640,
+            background_color=BG,
+        )
+        api.window = window
+
+        timer = threading.Timer(timeout_seconds(), lambda: _safe_destroy(window))
+        timer.daemon = True
+        timer.start()
+
+        webview.start()
+        timer.cancel()
+    except Exception:
+        return False
+
+    if not api.done:
+        write_result(pending, [])
+    return True
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -569,6 +959,9 @@ def main():
     catalog = load_catalog(catalog_path)
     if not catalog:
         write_result(pending, [])
+        return
+
+    if try_pywebview(pending, catalog, catalog_path):
         return
 
     sysname = platform.system()

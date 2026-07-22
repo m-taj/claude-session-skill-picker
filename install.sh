@@ -70,6 +70,21 @@ mkdir -p "$HOOK_DIR/images"
 cp "$SCRIPT_DIR/images/skillpicker-logo.gif" "$HOOK_DIR/images/skillpicker-logo.gif"
 echo "  ✓ Installed $HOOK_DIR/images/skillpicker-logo.gif"
 
+# Uninstaller — copied alongside so the picker's Settings > Uninstall button
+# works even if the cloned repo is later deleted.
+cp "$SCRIPT_DIR/uninstall.sh" "$HOOK_DIR/uninstall.sh"
+chmod +x "$HOOK_DIR/uninstall.sh"
+echo "  ✓ Installed $HOOK_DIR/uninstall.sh"
+
+# pywebview — optional. The picker renders as HTML/CSS in a native webview when
+# available and falls back automatically to the plain NSAlert/tkinter dialog if
+# this isn't installed, so a failure here must never fail the whole install.
+if "$PY" -m pip install --quiet pywebview 2>/dev/null; then
+    echo "  ✓ Installed pywebview (richer picker UI)"
+else
+    echo "  ~ pywebview not installed — picker will use the native NSAlert dialog instead"
+fi
+
 # ── 3. Patch settings.json ────────────────────────────────────────────────────
 if [[ "$NO_JQ" == "1" ]]; then
     echo ""
