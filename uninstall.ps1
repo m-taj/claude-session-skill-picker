@@ -14,8 +14,9 @@ Write-Host 'Uninstalling claude-session-skill-picker...'
 # never touches unrelated hooks/config the user has for that agent.
 $adaptersDir = Join-Path $HookDir 'adapters'
 if (Test-Path $adaptersDir) {
-    $py = Get-Command python -ErrorAction SilentlyContinue
-    if (-not $py) { $py = Get-Command py -ErrorAction SilentlyContinue }
+    $py = Get-Command py -ErrorAction SilentlyContinue
+    if (-not $py) { $py = Get-Command python -ErrorAction SilentlyContinue }
+    if (-not $py) { $py = Get-Command python3 -ErrorAction SilentlyContinue }
     if ($py) {
         Get-ChildItem -Path $adaptersDir -Filter '*.py' -ErrorAction SilentlyContinue | ForEach-Object {
             try { & $py.Source $_.FullName uninstall } catch {}
@@ -40,10 +41,13 @@ if (Test-Path $adaptersDir) {
     Remove-Item -Recurse -Force $adaptersDir
     Write-Host "  + Removed $adaptersDir"
 }
-$desktopShortcut = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Skill Picker Settings.lnk'
-if (Test-Path $desktopShortcut) {
-    Remove-Item -Force $desktopShortcut
-    Write-Host "  + Removed Desktop shortcut"
+$desktopDir = [Environment]::GetFolderPath('Desktop')
+if ($desktopDir) {
+    $desktopShortcut = Join-Path $desktopDir 'Skill Picker Settings.lnk'
+    if (Test-Path $desktopShortcut) {
+        Remove-Item -Force $desktopShortcut
+        Write-Host "  + Removed Desktop shortcut"
+    }
 }
 
 # --- 3. Clear cache/state files -----------------------------------------------
