@@ -986,3 +986,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # pywebview's Cocoa/WebKit backend can leave native helper threads alive
+    # after the window closes, which hangs CPython's normal interpreter
+    # teardown (Py_FinalizeEx joins them) forever. os._exit skips that join
+    # entirely — the result file is already written by this point.
+    os._exit(0)
