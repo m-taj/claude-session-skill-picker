@@ -94,6 +94,33 @@ def write_result(path, picks):
     except OSError:
         pass
 
+# ── Remembered picks (auto-select next session) ───────────────────────────────
+# Deliberately not named skills-picker-*/skills-pending-*/skills-spawned-* — those
+# prefixes get swept by skills-launch.py's 24h stale-file cleanup, which would
+# silently reset this toggle on any day with no session.
+STATE_FILENAME = "skills-remembered-picks.json"
+
+def _state_path(catalog_path):
+    return os.path.join(os.path.dirname(os.path.abspath(catalog_path)), STATE_FILENAME)
+
+def load_state(catalog_path):
+    """-> (remember: bool, picks: {name: arg})"""
+    try:
+        with open(_state_path(catalog_path), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return bool(data.get("remember")), dict(data.get("picks") or {})
+    except (OSError, ValueError):
+        return False, {}
+
+def save_state(catalog_path, remember, picks):
+    """Only call this on Activate — Skip should leave prior state untouched."""
+    try:
+        data = {"remember": bool(remember), "picks": dict(picks) if remember else {}}
+        with open(_state_path(catalog_path), "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except OSError:
+        pass
+
 # ── Probes ────────────────────────────────────────────────────────────────────
 
 def tkinter_works():
@@ -149,12 +176,14 @@ def _apply_dark_theme(root):
                     bordercolor=DIM, arrowcolor=ACCENT)
     style.configure("Vertical.TScrollbar", background=SURFACE, troughcolor=BG, borderwidth=0)
 
-def try_tkinter(pending, catalog):
+def try_tkinter(pending, catalog, catalog_path):
     try:
         import tkinter as tk
         from tkinter import ttk
     except Exception:
         return False
+
+    remember_prev, prior_picks = load_state(catalog_path)
 
     picks = []
     root = tk.Tk()
@@ -166,7 +195,7 @@ def try_tkinter(pending, catalog):
     ROW_H            = 30
     MAX_ROWS_VISIBLE = 12
     visible_rows     = min(len(catalog), MAX_ROWS_VISIBLE)
-    win_h            = 170 + visible_rows * ROW_H
+    win_h            = 195 + visible_rows * ROW_H
     root.geometry(f"640x{win_h}")
 
     try:
@@ -207,13 +236,14 @@ def try_tkinter(pending, catalog):
         row = ttk.Frame(inner)
         row.pack(anchor="w", fill="x", pady=1)
 
-        v = tk.BooleanVar(value=False)
+        v = tk.BooleanVar(value=entry["name"] in prior_picks)
         ttk.Checkbutton(row, text=row_label(entry), variable=v).pack(side="left", anchor="w")
 
         combo_var = None
         if entry.get("args"):
             args = entry["args"]
-            combo_var = tk.StringVar(value=args.get("default") or (args.get("choices") or [""])[0])
+            default_arg = prior_picks.get(entry["name"]) or args.get("default") or (args.get("choices") or [""])[0]
+            combo_var = tk.StringVar(value=default_arg)
             ttk.Combobox(
                 row,
                 textvariable=combo_var,
@@ -234,7 +264,11 @@ def try_tkinter(pending, catalog):
     canvas.bind_all("<Button-4>",   lambda e: canvas.yview_scroll(-1, "units"))  # Linux
     canvas.bind_all("<Button-5>",   lambda e: canvas.yview_scroll( 1, "units"))
 
-    ttk.Label(outer, text=HINT, style="Hint.TLabel").pack(anchor="w", pady=(12, 4))
+    remember_var = tk.BooleanVar(value=remember_prev)
+    ttk.Checkbutton(outer, text="Auto-select these picks next session",
+                    variable=remember_var).pack(anchor="w", pady=(12, 0))
+
+    ttk.Label(outer, text=HINT, style="Hint.TLabel").pack(anchor="w", pady=(8, 4))
 
     btns = ttk.Frame(outer)
     btns.pack(fill="x", pady=(8, 0))
@@ -244,6 +278,7 @@ def try_tkinter(pending, catalog):
             if v.get():
                 arg = cv.get() if cv is not None else ""
                 picks.append((entry["name"], arg))
+        save_state(catalog_path, remember_var.get(), picks)
         root.destroy()
 
     def on_skip():
@@ -264,21 +299,26 @@ def try_tkinter(pending, catalog):
 
 # ── macOS JXA picker (primary) ────────────────────────────────────────────────
 
-def try_jxa_mac(pending, catalog):
+def try_jxa_mac(pending, catalog, catalog_path):
     if not shutil.which("osascript"):
         return False
+
+    remember_prev, prior_picks = load_state(catalog_path)
 
     rows = []
     headers = group_headers(catalog)
     for i, entry in enumerate(catalog):
         if i in headers:
             rows.append({"type": "header", "text": headers[i].upper()})
+        args = entry.get("args") or {}
+        prior_arg = prior_picks.get(entry["name"])
         rows.append({
             "type":    "skill",
             "name":    entry["name"],
             "label":   row_label(entry),
-            "choices": (entry.get("args") or {}).get("choices") or [],
-            "default": (entry.get("args") or {}).get("default") or "",
+            "choices": args.get("choices") or [],
+            "default": prior_arg if prior_arg is not None else (args.get("default") or ""),
+            "checked": entry["name"] in prior_picks,
         })
 
     payload = json.dumps(rows)
@@ -315,6 +355,10 @@ alert.addButtonWithTitle("Activate");
 alert.addButtonWithTitle("Skip");
 // Blank out the default app/warning icon — the logo image below replaces it.
 alert.icon = $.NSImage.alloc.initWithSize($.NSMakeSize(1, 1));
+// Native "remember this choice" affordance — no custom widget needed.
+alert.showsSuppressionButton = true;
+alert.suppressionButton.title = "Auto-select these picks next session";
+alert.suppressionButton.state = %s;
 // Dark, monospace, terminal-inspired look — native controls (checkboxes,
 // popups, buttons) pick up dark rendering automatically from the appearance.
 alert.window.appearance = $.NSAppearance.appearanceNamed('NSAppearanceNameDarkAqua');
@@ -366,7 +410,7 @@ for (var i = 0; i < rows.length; i++) {
     b.setButtonType($.NSSwitchButton);
     b.title = r.label;
     b.font  = mono;
-    b.state = 0;
+    b.state = r.checked ? 1 : 0;
     content.addSubview(b);
 
     var popup = null;
@@ -410,6 +454,7 @@ var rc = alert.runModal;
 
 var out = [];
 if (rc == 1000) {
+    out.push("__REMEMBER__|" + (alert.suppressionButton.state == 1 ? 1 : 0));
     for (var k = 0; k < widgets.length; k++) {
         var wgt = widgets[k];
         if (wgt.checkbox.state == 1) {
@@ -426,6 +471,7 @@ out.join("\\n");
 """ % (
         payload,
         f"[ SELECT MODULES FOR THIS SESSION ]\\n{HINT}".replace('"', '\\"'),
+        1 if remember_prev else 0,
         LOGO_GIF_PATH.replace("\\", "\\\\").replace('"', '\\"'),
     )
 
@@ -450,15 +496,23 @@ out.join("\\n");
         return False
 
     valid_names = {e["name"] for e in catalog}
+    remember = None
     picks = []
     for line in r.stdout.splitlines():
         line = line.strip()
-        if not line or "|" not in line:
+        if not line:
+            continue
+        if line.startswith("__REMEMBER__|"):
+            remember = line.split("|", 1)[1] == "1"
+            continue
+        if "|" not in line:
             continue
         name, _, arg = line.partition("|")
         if name in valid_names:
             picks.append((name, arg))
     write_result(pending, picks)
+    if remember is not None:
+        save_state(catalog_path, remember, dict(picks))
     return True
 
 # ── macOS fallback: plain choose-from-list ────────────────────────────────────
@@ -520,17 +574,17 @@ def main():
     sysname = platform.system()
 
     if sysname == "Darwin":
-        if try_jxa_mac(pending, catalog):
+        if try_jxa_mac(pending, catalog, catalog_path):
             return
         if try_osascript_mac(pending, catalog):
             return
-        if tkinter_works() and try_tkinter(pending, catalog):
+        if tkinter_works() and try_tkinter(pending, catalog, catalog_path):
             return
         write_result(pending, [])
         return
 
     if sysname == "Windows":
-        if tkinter_works() and try_tkinter(pending, catalog):
+        if tkinter_works() and try_tkinter(pending, catalog, catalog_path):
             return
         write_result(pending, [])
         return
