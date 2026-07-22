@@ -1,13 +1,15 @@
 
 # Claude Session Skill Picker
 
-A pair of [Claude Code](https://claude.ai/code) hooks that pop a **native checkbox dialog** at the start of every session so you can pick which skills to activate. Picks get injected as context on your first message — Claude turns them on before replying.
+A pair of [Claude Code](https://claude.ai/code) hooks that pop a checkbox dialog at the start of every session so you can pick which skills to activate. Picks get injected as context on your first message — Claude turns them on before replying.
 
-- macOS: native NSAlert checkbox dialog (JXA + Cocoa, no install)
-- Windows: tkinter checkbox dialog (ships with the python.org installer)
+- Same dialog on macOS and Windows: rendered as HTML/CSS in a native webview (via the optional `pywebview` package) — falls back automatically to a plain native dialog (NSAlert on macOS, tkinter on Windows) if `pywebview` isn't installed
 - Auto-discovers installed user skills and enabled plugin skills every session
 - Skills with multiple modes (e.g. `lite | full | ultra`) get a dropdown next to the checkbox
 - Check "Auto-select these picks next session" to carry your selections forward without re-picking
+- ⚙ Settings button — uninstall, plus account/subscription info (placeholder today, accounts aren't built yet)
+
+> First run after install may take ~2 seconds longer than usual — that's macOS/Windows initializing the webview runtime for the first time, not a recurring cost.
 
 ---
 

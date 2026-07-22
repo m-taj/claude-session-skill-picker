@@ -70,6 +70,58 @@ New-Item -ItemType Directory -Force -Path $imgDstDir | Out-Null
 Copy-Item -Force -Path (Join-Path $ScriptDir 'images\skillpicker-logo.gif') -Destination (Join-Path $imgDstDir 'skillpicker-logo.gif')
 Write-Host "  + Installed $(Join-Path $imgDstDir 'skillpicker-logo.gif')"
 
+# Uninstaller — copied alongside so the picker's Settings > Uninstall button
+# works even if the cloned repo is later deleted.
+Copy-Item -Force -Path (Join-Path $ScriptDir 'uninstall.ps1') -Destination (Join-Path $HookDir 'uninstall.ps1')
+Write-Host "  + Installed $(Join-Path $HookDir 'uninstall.ps1')"
+
+# pywebview — optional. The picker renders as HTML/CSS in a native webview when
+# available and falls back automatically to the plain tkinter dialog if this
+# isn't installed, so a failure here must never fail the whole install.
+try {
+    Invoke-Expression "$PyCmd -m pip install --quiet pywebview" | Out-Null
+    Write-Host "  + Installed pywebview (richer picker UI)"
+} catch {
+    Write-Host "  ~ pywebview not installed - picker will use the native tkinter dialog instead"
+}
+
+# WebView2 runtime — the native component pywebview needs on Windows (pip can't
+# install this, it's not a Python package). Most modern Windows already has it
+# bundled with Edge; this is a no-op there. Same best-effort rule: never fail
+# the whole install over it, the tkinter fallback covers this machine either way.
+function Test-WebView2Installed {
+    $paths = @(
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+        'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+        'HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+    )
+    foreach ($p in $paths) {
+        try {
+            $v = (Get-ItemProperty -Path $p -Name 'pv' -ErrorAction SilentlyContinue).pv
+            if ($v -and $v -ne '0.0.0.0') { return $true }
+        } catch {}
+    }
+    return $false
+}
+
+if (Test-WebView2Installed) {
+    Write-Host "  + WebView2 runtime already present"
+} else {
+    try {
+        $bootstrapper = Join-Path $env:TEMP 'MicrosoftEdgeWebview2Setup.exe'
+        Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $bootstrapper -UseBasicParsing
+        Start-Process -FilePath $bootstrapper -ArgumentList '/silent', '/install' -Wait
+        Remove-Item -Force -ErrorAction SilentlyContinue $bootstrapper
+        if (Test-WebView2Installed) {
+            Write-Host "  + Installed WebView2 runtime (silent)"
+        } else {
+            Write-Host "  ~ WebView2 install did not complete - picker will use the native tkinter dialog instead"
+        }
+    } catch {
+        Write-Host "  ~ Could not install WebView2 runtime - picker will use the native tkinter dialog instead"
+    }
+}
+
 # --- 3. Patch settings.json --------------------------------------------------
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Settings) | Out-Null
 if (-not (Test-Path $Settings)) {
