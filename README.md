@@ -17,7 +17,8 @@ A pair of [Claude Code](https://claude.ai/code) hooks that pop a checkbox dialog
 
 | macOS | Windows |
 |---|---|
-| ![macOS dialog](images/mac.png) | ![Windows dialog](images/win.png) |
+|<img width="867" height="454" alt="Screenshot 2026-06-01 at 2 55 22 PM" src="https://github.com/user-attachments/assets/1ae64e00-51fe-44af-a14b-8b2f865d9c36" />
+| ![Windows dialog](images/win.png) |
 
 ---
 
