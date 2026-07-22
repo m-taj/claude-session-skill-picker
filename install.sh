@@ -49,7 +49,7 @@ fi
 
 # ── 2. Copy scripts + overrides ───────────────────────────────────────────────
 mkdir -p "$HOOK_DIR"
-for f in skills-launch.py skills-picker.py skills-inject.py; do
+for f in skills-launch.py skills-picker.py skills-inject.py skills-settings.py; do
     cp "$SCRIPT_DIR/$f" "$HOOK_DIR/$f"
     chmod +x "$HOOK_DIR/$f"
     echo "  ✓ Installed $HOOK_DIR/$f"
@@ -75,6 +75,14 @@ echo "  ✓ Installed $HOOK_DIR/images/skillpicker-logo.gif"
 cp "$SCRIPT_DIR/uninstall.sh" "$HOOK_DIR/uninstall.sh"
 chmod +x "$HOOK_DIR/uninstall.sh"
 echo "  ✓ Installed $HOOK_DIR/uninstall.sh"
+
+# Per-agent adapters (Codex, OpenCode, ...) — copied alongside so the
+# picker's Settings > Connected Agents section can install/uninstall them
+# even if the cloned repo is later deleted.
+mkdir -p "$HOOK_DIR/adapters"
+cp "$SCRIPT_DIR"/adapters/*.py "$HOOK_DIR/adapters/" 2>/dev/null || true
+cp "$SCRIPT_DIR"/adapters/*.js "$HOOK_DIR/adapters/" 2>/dev/null || true
+echo "  ✓ Installed $HOOK_DIR/adapters/"
 
 # pywebview — optional. The picker renders as HTML/CSS in a native webview when
 # available and falls back automatically to the plain NSAlert/tkinter dialog if
