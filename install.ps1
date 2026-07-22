@@ -93,10 +93,15 @@ Copy-Item -Force -Path $iconSrc -Destination $iconDst -ErrorAction SilentlyConti
 
 $desktopDir = [Environment]::GetFolderPath('Desktop')
 if (Test-Path $desktopDir) {
-    $pythonwSrc = if ($PyCmd -match '^"(.*)"') { $Matches[1] } else { $PyCmd }
-    $pythonwDir = Split-Path -Parent $pythonwSrc
+    # Don't guess pythonw.exe's location from the launcher we found on PATH —
+    # 'py.exe' lives in C:\Windows, which has 'pyw.exe' but no 'pythonw.exe' at
+    # all, so that guess always misses for the (preferred, most common) 'py'
+    # launcher case. Ask the interpreter itself for its real install dir,
+    # where python.exe and pythonw.exe always live side by side.
+    $realExe    = (Invoke-Expression "& $PyCmd -c `"import sys; print(sys.executable)`"").Trim()
+    $pythonwDir = Split-Path -Parent $realExe
     $pythonw    = Join-Path $pythonwDir 'pythonw.exe'
-    if (-not (Test-Path $pythonw)) { $pythonw = $pythonwSrc }  # fall back to python.exe
+    if (-not (Test-Path $pythonw)) { $pythonw = $realExe }  # fall back to python.exe itself
 
     $lnkPath = Join-Path $desktopDir 'Skill Picker Settings.lnk'
     $wsh = New-Object -ComObject WScript.Shell
@@ -113,7 +118,7 @@ if (Test-Path $desktopDir) {
 # available and falls back automatically to the plain tkinter dialog if this
 # isn't installed, so a failure here must never fail the whole install.
 try {
-    Invoke-Expression "$PyCmd -m pip install --quiet pywebview" | Out-Null
+    Invoke-Expression "& $PyCmd -m pip install --quiet pywebview" | Out-Null
     Write-Host "  + Installed pywebview (richer picker UI)"
 } catch {
     Write-Host "  ~ pywebview not installed - picker will use the native tkinter dialog instead"
