@@ -13,6 +13,7 @@ Also connects to **Codex** (ChatGPT's coding agent) and **OpenCode** — same di
 - Add a GitHub repo URL in Settings and its `SKILL.md` files join the catalog, grouped by repo
 - Connect or disconnect Codex and OpenCode from Settings — one checkbox per detected agent
 - A double-click Desktop shortcut opens Settings directly, with no terminal required
+- Disable the dialog or adjust its auto-close timeout from Settings — no shell config needed
 
 > First run after install may take ~2 seconds longer than usual — that's macOS/Windows initializing the webview runtime for the first time, not a recurring cost.
 
@@ -97,6 +98,10 @@ Add any GitHub repo containing `SKILL.md` files (at the repo root or under a `sk
 ---
 
 ## Disable / adjust timeout
+
+Settings → Picker Options has a checkbox to disable the dialog at session start and a field for the auto-close timeout — no shell config needed. Re-enable it any time from the same panel, reachable via the "Skill Picker Settings" Desktop shortcut even while the dialog itself is disabled.
+
+For scripting or CI, environment variables still work and take priority over the Settings values:
 
 ```bash
 export CLAUDE_SKILLS_PICKER=off              # skip the dialog entirely
