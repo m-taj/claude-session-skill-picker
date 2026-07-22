@@ -36,6 +36,10 @@ if [[ -d "$HOOK_DIR/adapters" ]]; then
     rm -rf "$HOOK_DIR/adapters"
     echo "  ✓ Removed $HOOK_DIR/adapters"
 fi
+if [[ -f "$HOME/Desktop/Skill Picker Settings.command" ]]; then
+    rm -f "$HOME/Desktop/Skill Picker Settings.command"
+    echo "  ✓ Removed Desktop shortcut"
+fi
 
 # ── 3. Clear cache/state files ────────────────────────────────────────────────
 rm -f "$CACHE_DIR"/skills-catalog.json \

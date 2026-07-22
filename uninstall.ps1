@@ -40,6 +40,11 @@ if (Test-Path $adaptersDir) {
     Remove-Item -Recurse -Force $adaptersDir
     Write-Host "  + Removed $adaptersDir"
 }
+$desktopShortcut = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Skill Picker Settings.bat'
+if (Test-Path $desktopShortcut) {
+    Remove-Item -Force $desktopShortcut
+    Write-Host "  + Removed Desktop shortcut"
+}
 
 # --- 3. Clear cache/state files -----------------------------------------------
 Remove-Item -ErrorAction SilentlyContinue -Force (Join-Path $CacheDir 'skills-catalog.json')

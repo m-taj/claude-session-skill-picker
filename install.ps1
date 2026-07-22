@@ -84,6 +84,15 @@ Copy-Item -Force -Path (Join-Path $ScriptDir 'adapters\*.py') -Destination $adap
 Copy-Item -Force -Path (Join-Path $ScriptDir 'adapters\*.js') -Destination $adaptersDstDir -ErrorAction SilentlyContinue
 Write-Host "  + Installed $adaptersDstDir"
 
+# Double-click Settings shortcut — placed on the Desktop so a non-technical
+# user can open Settings (e.g. to reconnect Codex/OpenCode) without ever
+# touching a terminal.
+$desktopDir = [Environment]::GetFolderPath('Desktop')
+if (Test-Path $desktopDir) {
+    Copy-Item -Force -Path (Join-Path $ScriptDir 'skills-settings.bat') -Destination (Join-Path $desktopDir 'Skill Picker Settings.bat')
+    Write-Host "  + Added 'Skill Picker Settings' shortcut to your Desktop"
+}
+
 # pywebview — optional. The picker renders as HTML/CSS in a native webview when
 # available and falls back automatically to the plain tkinter dialog if this
 # isn't installed, so a failure here must never fail the whole install.
