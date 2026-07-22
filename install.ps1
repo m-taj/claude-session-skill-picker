@@ -84,6 +84,31 @@ Copy-Item -Force -Path (Join-Path $ScriptDir 'adapters\*.py') -Destination $adap
 Copy-Item -Force -Path (Join-Path $ScriptDir 'adapters\*.js') -Destination $adaptersDstDir -ErrorAction SilentlyContinue
 Write-Host "  + Installed $adaptersDstDir"
 
+# Double-click Settings shortcut — a real .lnk (custom icon, no console
+# window) so a non-technical user can open Settings without ever touching a
+# terminal. pythonw.exe runs the script with no console attached at all.
+$iconSrc = Join-Path $ScriptDir 'images\skill-picker-icon.ico'
+$iconDst = Join-Path $HookDir 'images\skill-picker-icon.ico'
+Copy-Item -Force -Path $iconSrc -Destination $iconDst -ErrorAction SilentlyContinue
+
+$desktopDir = [Environment]::GetFolderPath('Desktop')
+if (Test-Path $desktopDir) {
+    $pythonwSrc = if ($PyCmd -match '^"(.*)"') { $Matches[1] } else { $PyCmd }
+    $pythonwDir = Split-Path -Parent $pythonwSrc
+    $pythonw    = Join-Path $pythonwDir 'pythonw.exe'
+    if (-not (Test-Path $pythonw)) { $pythonw = $pythonwSrc }  # fall back to python.exe
+
+    $lnkPath = Join-Path $desktopDir 'Skill Picker Settings.lnk'
+    $wsh = New-Object -ComObject WScript.Shell
+    $shortcut = $wsh.CreateShortcut($lnkPath)
+    $shortcut.TargetPath = $pythonw
+    $shortcut.Arguments  = "`"$(Join-Path $HookDir 'skills-settings.py')`""
+    $shortcut.IconLocation = $iconDst
+    $shortcut.WorkingDirectory = $HookDir
+    $shortcut.Save()
+    Write-Host "  + Added 'Skill Picker Settings' shortcut to your Desktop"
+}
+
 # pywebview — optional. The picker renders as HTML/CSS in a native webview when
 # available and falls back automatically to the plain tkinter dialog if this
 # isn't installed, so a failure here must never fail the whole install.

@@ -84,6 +84,18 @@ cp "$SCRIPT_DIR"/adapters/*.py "$HOOK_DIR/adapters/" 2>/dev/null || true
 cp "$SCRIPT_DIR"/adapters/*.js "$HOOK_DIR/adapters/" 2>/dev/null || true
 echo "  ✓ Installed $HOOK_DIR/adapters/"
 
+# Double-click Settings app — placed on the Desktop so a non-technical user
+# can open Settings (e.g. to reconnect Codex/OpenCode) without ever touching
+# a terminal. A real .app bundle (not a .command file) so LaunchServices
+# runs it directly with no Terminal window flash, and so it gets its own icon.
+if [[ -d "$HOME/Desktop" ]]; then
+    rm -rf "$HOME/Desktop/Skill Picker Settings.app"
+    cp -R "$SCRIPT_DIR/Skill Picker Settings.app" "$HOME/Desktop/Skill Picker Settings.app"
+    chmod +x "$HOME/Desktop/Skill Picker Settings.app/Contents/MacOS/launcher"
+    xattr -cr "$HOME/Desktop/Skill Picker Settings.app" 2>/dev/null || true
+    echo "  ✓ Added \"Skill Picker Settings\" app to your Desktop"
+fi
+
 # pywebview — optional. The picker renders as HTML/CSS in a native webview when
 # available and falls back automatically to the plain NSAlert/tkinter dialog if
 # this isn't installed, so a failure here must never fail the whole install.

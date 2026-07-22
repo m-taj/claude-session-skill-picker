@@ -1,0 +1,5 @@
+#!/bin/bash
+# App-bundle executable — launched directly by LaunchServices on double-click,
+# never through Terminal, so no console window ever appears.
+PY=$(command -v python3 || echo /usr/bin/python3)
+exec "$PY" "$HOME/.claude/hooks/skills-settings.py"
