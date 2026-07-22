@@ -36,8 +36,8 @@ if [[ -d "$HOOK_DIR/adapters" ]]; then
     rm -rf "$HOOK_DIR/adapters"
     echo "  ✓ Removed $HOOK_DIR/adapters"
 fi
-if [[ -f "$HOME/Desktop/Skill Picker Settings.command" ]]; then
-    rm -f "$HOME/Desktop/Skill Picker Settings.command"
+if [[ -d "$HOME/Desktop/Skill Picker Settings.app" ]]; then
+    rm -rf "$HOME/Desktop/Skill Picker Settings.app"
     echo "  ✓ Removed Desktop shortcut"
 fi
 

@@ -40,7 +40,7 @@ if (Test-Path $adaptersDir) {
     Remove-Item -Recurse -Force $adaptersDir
     Write-Host "  + Removed $adaptersDir"
 }
-$desktopShortcut = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Skill Picker Settings.bat'
+$desktopShortcut = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Skill Picker Settings.lnk'
 if (Test-Path $desktopShortcut) {
     Remove-Item -Force $desktopShortcut
     Write-Host "  + Removed Desktop shortcut"
