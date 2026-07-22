@@ -14,6 +14,7 @@ Also connects to **Codex** (ChatGPT's coding agent) and **OpenCode** — same di
 - Connect or disconnect Codex and OpenCode from Settings — one checkbox per detected agent
 - A double-click Desktop shortcut opens Settings directly, with no terminal required
 - Disable the dialog or adjust its auto-close timeout from Settings — no shell config needed
+- Optional AI skill suggestions (free) — Settings shows skills you haven't tried yet, based on your usage over time
 
 > First run after install may take ~2 seconds longer than usual — that's macOS/Windows initializing the webview runtime for the first time, not a recurring cost.
 
@@ -94,6 +95,20 @@ To open Settings without waiting for a new session, double-click **Skill Picker 
 ## Skill repos
 
 Add any GitHub repo containing `SKILL.md` files (at the repo root or under a `skills/` folder) from Settings → Skill Repos. It's shallow-cloned into `~/.claude/cache/skill-repos/`, scanned alongside your local skills, and shown in the picker grouped by `owner/repo`. Refreshing is manual — repos are never re-fetched automatically on session start.
+
+---
+
+## AI skill suggestions (optional, free)
+
+Based on your usage over the last 30 days, the picker can suggest skills you haven't tried yet — a 💡 badge appears next to the gear icon when a new suggestion is ready. Off until you add a key; nothing is ever sent anywhere without one.
+
+**Setup**, from Settings → Suggestions:
+
+1. Get a free API key — click "Open aistudio.google.com/apikey…" (no credit card required, any Google account works).
+2. Paste it into the key field and click Save.
+3. Toggle "Enable AI skill suggestions" on (on by default once a key is set).
+
+Suggestions refresh at most once a day and are computed by Google's Gemini API (free tier). **Only skill names and pick counts are ever sent — never your conversation or prompt text.** If you'd rather manage the key via your shell instead of the UI, set `GEMINI_API_KEY` as an environment variable — it takes priority over a key saved in Settings.
 
 ---
 

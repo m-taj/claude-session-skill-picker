@@ -23,6 +23,7 @@ CLAUDE_DIR = os.path.join(HOME, ".claude")
 CACHE_DIR  = os.path.join(CLAUDE_DIR, "cache")
 HOOK_DIR   = os.path.dirname(os.path.abspath(__file__))
 PICKER     = os.path.join(HOOK_DIR, "skills-picker.py")
+SUGGEST    = os.path.join(HOOK_DIR, "skills-suggest.py")
 OVERRIDES  = os.path.join(HOOK_DIR, "skills-picker-overrides.json")
 SETTINGS   = os.path.join(CLAUDE_DIR, "settings.json")
 STALE_AGE  = 24 * 3600
@@ -423,6 +424,17 @@ def main():
         subprocess.Popen([py, PICKER, pending, catalog_path], **kwargs)
     except Exception:
         pass
+
+    # Skill suggestions — detached, best-effort. The worker itself checks
+    # GEMINI_API_KEY and the once-per-day cache, so this is a near-instant
+    # no-op on most sessions; never blocks this hook either way.
+    if os.path.isfile(SUGGEST):
+        suggest_kwargs = dict(kwargs)
+        suggest_kwargs["stdout"] = subprocess.DEVNULL
+        try:
+            subprocess.Popen([py, SUGGEST], **suggest_kwargs)
+        except Exception:
+            pass
 
     sys.exit(0)
 

@@ -22,7 +22,7 @@ if [[ -d "$HOOK_DIR/adapters" ]]; then
 fi
 
 # ── 2. Remove installed scripts + assets ──────────────────────────────────────
-for f in skills-launch.py skills-picker.py skills-inject.py skills-settings.py skills-picker-overrides.json; do
+for f in skills-launch.py skills-picker.py skills-inject.py skills-settings.py skills-suggest.py skills-picker-overrides.json; do
     if [[ -f "$HOOK_DIR/$f" ]]; then
         rm -f "$HOOK_DIR/$f"
         echo "  ✓ Removed $HOOK_DIR/$f"
@@ -46,6 +46,9 @@ rm -f "$CACHE_DIR"/skills-catalog.json \
       "$CACHE_DIR"/skills-remembered-picks.json \
       "$CACHE_DIR"/skills-repo-sources.json \
       "$CACHE_DIR"/skills-connected-agents.json \
+      "$CACHE_DIR"/skills-picker-prefs.json \
+      "$CACHE_DIR"/skills-usage-history.json \
+      "$CACHE_DIR"/skills-suggestions-cache.json \
       "$CACHE_DIR"/skills-spawned-*.txt \
       "$CACHE_DIR"/skills-pending-*.txt \
       "$CACHE_DIR"/skills-picker-*.log 2>/dev/null || true
