@@ -9,8 +9,22 @@ $CacheDir = Join-Path $env:USERPROFILE '.claude\cache'
 
 Write-Host 'Uninstalling claude-session-skill-picker...'
 
-# --- 1. Remove installed scripts + assets ------------------------------------
-foreach ($f in @('skills-launch.py', 'skills-picker.py', 'skills-inject.py', 'skills-picker-overrides.json')) {
+# --- 1. Disconnect any connected agents first --------------------------------
+# Each adapter's own uninstall() strips only its own hook/plugin entries —
+# never touches unrelated hooks/config the user has for that agent.
+$adaptersDir = Join-Path $HookDir 'adapters'
+if (Test-Path $adaptersDir) {
+    $py = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $py) { $py = Get-Command py -ErrorAction SilentlyContinue }
+    if ($py) {
+        Get-ChildItem -Path $adaptersDir -Filter '*.py' -ErrorAction SilentlyContinue | ForEach-Object {
+            try { & $py.Source $_.FullName uninstall } catch {}
+        }
+    }
+}
+
+# --- 2. Remove installed scripts + assets ------------------------------------
+foreach ($f in @('skills-launch.py', 'skills-picker.py', 'skills-inject.py', 'skills-settings.py', 'skills-picker-overrides.json')) {
     $p = Join-Path $HookDir $f
     if (Test-Path $p) {
         Remove-Item -Force $p
@@ -22,16 +36,23 @@ if (Test-Path $imgDir) {
     Remove-Item -Recurse -Force $imgDir
     Write-Host "  + Removed $imgDir"
 }
+if (Test-Path $adaptersDir) {
+    Remove-Item -Recurse -Force $adaptersDir
+    Write-Host "  + Removed $adaptersDir"
+}
 
-# --- 2. Clear cache/state files -----------------------------------------------
+# --- 3. Clear cache/state files -----------------------------------------------
 Remove-Item -ErrorAction SilentlyContinue -Force (Join-Path $CacheDir 'skills-catalog.json')
 Remove-Item -ErrorAction SilentlyContinue -Force (Join-Path $CacheDir 'skills-remembered-picks.json')
+Remove-Item -ErrorAction SilentlyContinue -Force (Join-Path $CacheDir 'skills-repo-sources.json')
+Remove-Item -ErrorAction SilentlyContinue -Force (Join-Path $CacheDir 'skills-connected-agents.json')
+Remove-Item -ErrorAction SilentlyContinue -Recurse -Force (Join-Path $CacheDir 'skill-repos')
 Remove-Item -ErrorAction SilentlyContinue -Force (Join-Path $CacheDir 'skills-spawned-*.txt')
 Remove-Item -ErrorAction SilentlyContinue -Force (Join-Path $CacheDir 'skills-pending-*.txt')
 Remove-Item -ErrorAction SilentlyContinue -Force (Join-Path $CacheDir 'skills-picker-*.log')
 Write-Host "  + Cleared cache files"
 
-# --- 3. Strip the hook entries from settings.json ----------------------------
+# --- 4. Strip the hook entries from settings.json ----------------------------
 if (Test-Path $Settings) {
     $json = Get-Content $Settings -Raw | ConvertFrom-Json
     if ($json.PSObject.Properties['hooks']) {

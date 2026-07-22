@@ -45,11 +45,87 @@ PICKER_DIR     = os.path.dirname(os.path.abspath(__file__))
 LOGO_GIF_PATH  = os.path.join(PICKER_DIR, "images", "skillpicker-logo.gif")
 UNINSTALL_SH   = os.path.join(PICKER_DIR, "uninstall.sh")
 UNINSTALL_PS1  = os.path.join(PICKER_DIR, "uninstall.ps1")
+ADAPTERS_DIR   = os.path.join(PICKER_DIR, "adapters")
 
 # No accounts/billing system exists yet (see project plan) — these are placeholder
 # strings so the Settings panel's layout is already right when that ships.
 ACCOUNT_LINE      = "Account: Not signed in"
 SUBSCRIPTION_LINE = "Subscription: Free (beta) — accounts & billing are coming in a future update."
+
+# ── Connected agents (Codex, OpenCode, ...) ───────────────────────────────────
+# Claude Code isn't in this list — this picker only ever runs as ITS hook, so
+# it's always "connected" and never something the user can toggle off here.
+_AGENTS = {
+    "codex":    {"label": "Codex",    "adapter": os.path.join(ADAPTERS_DIR, "codex.py")},
+    "opencode": {"label": "OpenCode", "adapter": os.path.join(ADAPTERS_DIR, "opencode.py")},
+}
+
+CONNECTED_AGENTS_FILENAME = "skills-connected-agents.json"
+
+def _connected_agents_path(catalog_path):
+    return os.path.join(os.path.dirname(os.path.abspath(catalog_path)), CONNECTED_AGENTS_FILENAME)
+
+def load_connected_agents(catalog_path):
+    try:
+        with open(_connected_agents_path(catalog_path), "r", encoding="utf-8") as f:
+            return dict(json.load(f))
+    except (OSError, ValueError):
+        return {}
+
+def save_connected_agents(catalog_path, state):
+    try:
+        with open(_connected_agents_path(catalog_path), "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+    except OSError:
+        pass
+
+def _load_adapter_module(path):
+    """Load an adapter script (adapters/codex.py, adapters/opencode.py — plain
+    standalone scripts, not a package) as a Python module by file path."""
+    if not os.path.isfile(path):
+        return None
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(os.path.basename(path)[:-3], path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+def agent_detected(agent_id):
+    info = _AGENTS.get(agent_id)
+    if not info:
+        return False
+    mod = _load_adapter_module(info["adapter"])
+    if mod is None:
+        return False
+    try:
+        return bool(mod.is_installed())
+    except Exception:
+        return False
+
+def run_agent_action(agent_id, action):
+    """action: 'install' | 'uninstall'. Returns (ok: bool, message: str) — the
+    message is whatever the adapter printed, same text an interactive install
+    would show, just captured instead of going to a terminal no one's watching."""
+    info = _AGENTS.get(agent_id)
+    if not info:
+        return False, "Unknown agent."
+    mod = _load_adapter_module(info["adapter"])
+    if mod is None:
+        return False, f"{info['label']} adapter not found — reinstall this project."
+
+    import io
+    import contextlib
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            ok = mod.install() if action == "install" else mod.uninstall()
+    except Exception as e:
+        return False, f"Error: {e}"
+    message = buf.getvalue().strip() or ("Done." if ok else "Failed.")
+    return bool(ok), message
 
 def run_uninstaller():
     """Best-effort: run the platform uninstaller if it was installed alongside this
@@ -817,6 +893,13 @@ _PAGE_TEMPLATE = Template("""
   }
   .repo-row button { padding: 3px 8px; font-size: 11px; }
   .repo-msg { font-size: 11px; color: $dim; min-height: 14px; margin-top: 4px; }
+  .agent-row {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 12px; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .agent-row label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  .agent-row .dim { font-size: 11px; }
+  .agent-msg { font-size: 11px; color: $dim; min-height: 14px; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -843,6 +926,11 @@ _PAGE_TEMPLATE = Template("""
     <h2>[ SETTINGS ]</h2>
     <p>$account</p>
     <p class="sub">$subscription</p>
+
+    <h2>[ CONNECTED AGENTS ]</h2>
+    <p class="sub">Skills picked here also activate in any connected agent. Only agents detected on this machine can be connected.</p>
+    <div id="agentList"></div>
+    <div class="agent-msg" id="agentMsg"></div>
 
     <h2>[ SKILL REPOS ]</h2>
     <p class="sub">Add a GitHub repo URL to pull in its skills (SKILL.md at the repo root or a skills/ subdir). Fetched once on add; use Refresh to pull updates.</p>
@@ -882,10 +970,17 @@ document.getElementById('activateBtn').addEventListener('click', () => {
 document.getElementById('skipBtn').addEventListener('click', () => {
   window.pywebview.api.skip();
 });
+function openSettings() {
+  document.getElementById('settingsPanel').classList.add('open');
+  renderRepos();
+  renderAgents();
+}
 document.getElementById('settingsBtn').addEventListener('click', () => {
   document.getElementById('settingsPanel').classList.toggle('open');
   renderRepos();
+  renderAgents();
 });
+if ($open_settings) { window.addEventListener('pywebviewready', openSettings); }
 document.getElementById('settingsCloseBtn').addEventListener('click', () => {
   document.getElementById('settingsPanel').classList.remove('open');
 });
@@ -897,6 +992,48 @@ document.getElementById('uninstallBtn').addEventListener('click', () => {
     });
   }
 });
+
+function renderAgents() {
+  window.pywebview.api.list_agents().then(agents => {
+    const list = document.getElementById('agentList');
+    list.innerHTML = '';
+    agents.forEach(agent => {
+      const row = document.createElement('div');
+      row.className = 'agent-row';
+
+      const label = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = agent.connected;
+      cb.disabled = agent.locked || !agent.detected;
+      const text = document.createElement('span');
+      text.textContent = agent.label;
+      label.appendChild(cb);
+      label.appendChild(text);
+
+      const status = document.createElement('span');
+      status.className = 'dim';
+      status.textContent = agent.locked ? 'always on'
+        : (agent.detected ? '' : 'not detected on this machine');
+
+      if (!agent.locked && agent.detected) {
+        cb.addEventListener('change', () => {
+          cb.disabled = true;
+          document.getElementById('agentMsg').textContent = 'Working…';
+          window.pywebview.api.set_agent_connected(agent.id, cb.checked).then(res => {
+            cb.disabled = false;
+            cb.checked = res.connected;
+            document.getElementById('agentMsg').textContent = res.message || '';
+          });
+        });
+      }
+
+      row.appendChild(label);
+      row.appendChild(status);
+      list.appendChild(row);
+    });
+  });
+}
 
 function renderRepos() {
   window.pywebview.api.list_repos().then(repos => {
@@ -1008,6 +1145,32 @@ class _PickerApi:
             fetch_repo(self.catalog_path, url, refresh=True)
         return {"ok": True, "message": f"Refreshed {len(repos)} repo(s)."}
 
+    def list_agents(self):
+        connected = load_connected_agents(self.catalog_path)
+        agents = [{
+            "id": "claude", "label": "Claude Code",
+            "detected": True, "connected": True, "locked": True,
+        }]
+        for agent_id, info in _AGENTS.items():
+            detected = agent_detected(agent_id)
+            agents.append({
+                "id": agent_id,
+                "label": info["label"],
+                "detected": detected,
+                "connected": bool(connected.get(agent_id)) if detected else False,
+                "locked": False,
+            })
+        return agents
+
+    def set_agent_connected(self, agent_id, connected):
+        if agent_id not in _AGENTS:
+            return {"ok": False, "message": "Unknown agent."}
+        ok, message = run_agent_action(agent_id, "install" if connected else "uninstall")
+        state = load_connected_agents(self.catalog_path)
+        state[agent_id] = bool(connected) if ok else state.get(agent_id, False)
+        save_connected_agents(self.catalog_path, state)
+        return {"ok": ok, "message": message, "connected": state[agent_id]}
+
     def close_window(self):
         _safe_destroy(self.window)
         return "ok"
@@ -1062,6 +1225,7 @@ def try_pywebview(pending, catalog, catalog_path):
         remember_checked="checked" if remember_prev else "",
         account=html.escape(ACCOUNT_LINE),
         subscription=html.escape(SUBSCRIPTION_LINE),
+        open_settings="true" if os.environ.get("CLAUDE_SKILLS_PICKER_OPEN_SETTINGS") == "1" else "false",
     )
 
     api = _PickerApi(catalog, pending, catalog_path)

@@ -47,7 +47,7 @@ Write-Host "  + Python 3 found (invocation: $PyCmd)"
 
 # --- 2. Copy scripts + overrides ---------------------------------------------
 New-Item -ItemType Directory -Force -Path $HookDir | Out-Null
-foreach ($f in @('skills-launch.py', 'skills-picker.py', 'skills-inject.py')) {
+foreach ($f in @('skills-launch.py', 'skills-picker.py', 'skills-inject.py', 'skills-settings.py')) {
     $src = Join-Path $ScriptDir $f
     $dst = Join-Path $HookDir   $f
     Copy-Item -Force -Path $src -Destination $dst
@@ -74,6 +74,15 @@ Write-Host "  + Installed $(Join-Path $imgDstDir 'skillpicker-logo.gif')"
 # works even if the cloned repo is later deleted.
 Copy-Item -Force -Path (Join-Path $ScriptDir 'uninstall.ps1') -Destination (Join-Path $HookDir 'uninstall.ps1')
 Write-Host "  + Installed $(Join-Path $HookDir 'uninstall.ps1')"
+
+# Per-agent adapters (Codex, OpenCode, ...) — copied alongside so the
+# picker's Settings > Connected Agents section can install/uninstall them
+# even if the cloned repo is later deleted.
+$adaptersDstDir = Join-Path $HookDir 'adapters'
+New-Item -ItemType Directory -Force -Path $adaptersDstDir | Out-Null
+Copy-Item -Force -Path (Join-Path $ScriptDir 'adapters\*.py') -Destination $adaptersDstDir -ErrorAction SilentlyContinue
+Copy-Item -Force -Path (Join-Path $ScriptDir 'adapters\*.js') -Destination $adaptersDstDir -ErrorAction SilentlyContinue
+Write-Host "  + Installed $adaptersDstDir"
 
 # pywebview — optional. The picker renders as HTML/CSS in a native webview when
 # available and falls back automatically to the plain tkinter dialog if this
