@@ -12,6 +12,8 @@ GEMINI_API_KEY isn't set, this script exits immediately and does nothing —
 no network call, no error, no nagging.
 
 Get a free key (no credit card required): https://aistudio.google.com/apikey
+
+Part of claude-session-skill-picker — github.com/m-taj/claude-session-skill-picker
 """
 
 import os

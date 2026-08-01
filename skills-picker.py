@@ -14,11 +14,14 @@ Strategy (first that works wins, same on both platforms):
                    fallback: 'choose from list' (Cmd-click multi-select, no arg picker)
                    fallback: tkinter checklist
      Windows    -> tkinter ttk.Checkbutton + ttk.Combobox per row
+
+Part of claude-session-skill-picker — github.com/m-taj/claude-session-skill-picker
 """
 
 import os
 import re
 import sys
+import time
 import json
 import html
 import shutil
@@ -47,6 +50,21 @@ LOGO_GIF_PATH  = os.path.join(PICKER_DIR, "images", "skillpicker-logo.gif")
 UNINSTALL_SH   = os.path.join(PICKER_DIR, "uninstall.sh")
 UNINSTALL_PS1  = os.path.join(PICKER_DIR, "uninstall.ps1")
 ADAPTERS_DIR   = os.path.join(PICKER_DIR, "adapters")
+VERSION_PATH   = os.path.join(PICKER_DIR, "VERSION")
+CHECKSUMS_PATH = os.path.join(PICKER_DIR, "CHECKSUMS.txt")
+
+# claude-session-skill-picker — github.com/m-taj/claude-session-skill-picker
+# Shown in the Settings > Updates tab; stripping it to rebrand a fork is a
+# deliberate act, not an accident of a casual copy-paste.
+REPO_URL     = "https://github.com/m-taj/claude-session-skill-picker.git"
+PROJECT_LINE = "claude-session-skill-picker — github.com/m-taj/claude-session-skill-picker"
+
+def get_local_version():
+    try:
+        with open(VERSION_PATH, "r", encoding="utf-8") as f:
+            return f.read().strip() or "0.0.0"
+    except OSError:
+        return "0.0.0"
 
 # No accounts/billing system exists yet (see project plan) — these are placeholder
 # strings so the Settings panel's layout is already right when that ships.
@@ -100,6 +118,7 @@ def load_picker_prefs(catalog_path):
     data.setdefault("timeout", DEFAULT_TIMEOUT)
     data.setdefault("gemini_api_key", "")
     data.setdefault("suggestions_enabled", True)
+    data.setdefault("update_check_enabled", True)
     return data
 
 def save_picker_prefs(catalog_path, prefs):
@@ -134,6 +153,66 @@ def save_suggestions_cache(catalog_path, data):
             json.dump(data, f, indent=2)
     except OSError:
         pass
+
+# ── Update / integrity check (GitHub Releases, once/day) ──────────────────────
+# Computed out-of-process by skills-update.py; the picker only ever reads the
+# cache file it writes, marks it seen, and (on explicit user click) performs
+# the actual update. See skills-update.py for the version-check and checksum
+# logic shared with run_update() below.
+UPDATE_CACHE_FILENAME = "skills-update-cache.json"
+
+def _update_cache_path(catalog_path):
+    return os.path.join(os.path.dirname(os.path.abspath(catalog_path)), UPDATE_CACHE_FILENAME)
+
+def load_update_cache(catalog_path):
+    try:
+        with open(_update_cache_path(catalog_path), "r", encoding="utf-8") as f:
+            data = dict(json.load(f))
+    except (OSError, ValueError):
+        data = {}
+    data.setdefault("current_version", get_local_version())
+    data.setdefault("latest_version", get_local_version())
+    data.setdefault("update_available", False)
+    data.setdefault("tampered_files", [])
+    data.setdefault("seen", True)
+    return data
+
+def save_update_cache(catalog_path, data):
+    try:
+        with open(_update_cache_path(catalog_path), "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except OSError:
+        pass
+
+def _verify_checksums_at(base_dir):
+    """Same logic as skills-update.py's verify_checksums(), duplicated per
+    this project's no-cross-file-imports convention for standalone hook
+    scripts — used here to sanity-check a freshly cloned release before
+    installing it (see run_update())."""
+    checksums_file = os.path.join(base_dir, "CHECKSUMS.txt")
+    if not os.path.isfile(checksums_file):
+        return []
+    try:
+        with open(checksums_file, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return []
+    mismatches = []
+    for line in lines:
+        line = line.strip()
+        if not line or "  " not in line:
+            continue
+        expected, _, relname = line.partition("  ")
+        path = os.path.join(base_dir, relname)
+        try:
+            with open(path, "rb") as f:
+                actual = hashlib.sha256(f.read()).hexdigest()
+        except OSError:
+            mismatches.append(relname)
+            continue
+        if actual != expected:
+            mismatches.append(relname)
+    return mismatches
 
 def _load_adapter_module(path):
     """Load an adapter script (adapters/codex.py, adapters/opencode.py — plain
@@ -959,7 +1038,7 @@ _PAGE_TEMPLATE = Template("""
   .agent-row label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
   .agent-row .dim { font-size: 11px; }
   .agent-msg { font-size: 11px; color: $dim; min-height: 14px; margin-top: 4px; }
-  .suggest-btn { position: relative; margin-left: 6px; }
+  .icon-btn { position: relative; margin-left: 6px; }
   .badge {
     display: none; position: absolute; top: -6px; right: -6px;
     background: $accent2; color: $bg; border-radius: 8px;
@@ -1030,8 +1109,8 @@ _PAGE_TEMPLATE = Template("""
 
   <div class="btnrow">
     <div>
-      <button class="gear" id="settingsBtn">&#9881;</button>
-      <button class="gear suggest-btn" id="suggestBtn" style="display:none;">&#128161;<span class="badge" id="suggestBadge"></span></button>
+      <button class="gear icon-btn" id="settingsBtn">&#9881;<span class="badge" id="updateBadge"></span></button>
+      <button class="gear icon-btn" id="suggestBtn" style="display:none;">&#128161;<span class="badge" id="suggestBadge"></span></button>
     </div>
     <div>
       <button id="skipBtn">Skip</button>
@@ -1057,6 +1136,7 @@ _PAGE_TEMPLATE = Template("""
       <button class="tab-btn" data-tab="agents">Agents</button>
       <button class="tab-btn" data-tab="suggestions">Suggestions</button>
       <button class="tab-btn" data-tab="repos">Repos</button>
+      <button class="tab-btn" data-tab="updates">Updates</button>
     </div>
 
     <div class="tab-content active" data-tab-content="general">
@@ -1119,6 +1199,21 @@ _PAGE_TEMPLATE = Template("""
       </div>
     </div>
 
+    <div class="tab-content" data-tab-content="updates">
+      <p class="sub">Current version: <span id="curVersion">$version</span></p>
+      <p class="sub" id="updateStatusMsg">Checking&hellip;</p>
+      <div class="btnrow">
+        <div></div>
+        <button class="accent" id="updateNowBtn" style="display:none;">Update now</button>
+      </div>
+      <div class="agent-msg" id="updateMsg"></div>
+      <label class="switch-row" style="margin-top:10px;">
+        <span>Check for updates automatically</span>
+        <label class="switch"><input type="checkbox" id="updateCheckChk"><span class="slider"></span></label>
+      </label>
+      <p class="sub" style="margin-top:16px; opacity:0.7;">$project_line</p>
+    </div>
+
     <div class="btnrow">
       <div></div>
       <button id="settingsCloseBtn">Close</button>
@@ -1161,19 +1256,58 @@ function renderSuggestSettings() {
     document.getElementById('suggestionsEnabledChk').checked = s.enabled;
   });
 }
-function openSettings() {
-  document.getElementById('settingsPanel').classList.add('open');
+function renderUpdateSettings() {
+  window.pywebview.api.get_update_status().then(s => {
+    document.getElementById('curVersion').textContent = s.current_version;
+    document.getElementById('updateCheckChk').checked = true;
+    const msg = document.getElementById('updateStatusMsg');
+    const btn = document.getElementById('updateNowBtn');
+    let text = s.update_available ? ('v' + s.latest_version + ' is available.') : 'Up to date.';
+    if (s.tampered_files && s.tampered_files.length) {
+      text += ' ' + s.tampered_files.length + ' installed file(s) differ from the release (modified locally).';
+    }
+    msg.textContent = text;
+    btn.style.display = s.update_available ? 'inline-block' : 'none';
+  });
+  window.pywebview.api.get_picker_prefs().then(prefs => {
+    document.getElementById('updateCheckChk').checked = prefs.update_check_enabled !== false;
+  });
+}
+function refreshSettingsPanels() {
   renderRepos();
   renderAgents();
   renderPickerOptions();
   renderSuggestSettings();
+  renderUpdateSettings();
+  window.pywebview.api.get_update_status().then(s => {
+    const flagged = s.update_available || (s.tampered_files && s.tampered_files.length);
+    document.getElementById('updateBadge').classList.remove('show');
+    if (flagged && !s.seen) {
+      document.querySelector('.tab-btn[data-tab="updates"]').click();
+      window.pywebview.api.mark_update_seen();
+    }
+  });
+}
+function openSettings() {
+  document.getElementById('settingsPanel').classList.add('open');
+  refreshSettingsPanels();
 }
 document.getElementById('settingsBtn').addEventListener('click', () => {
   document.getElementById('settingsPanel').classList.toggle('open');
-  renderRepos();
-  renderAgents();
-  renderPickerOptions();
-  renderSuggestSettings();
+  refreshSettingsPanels();
+});
+document.getElementById('updateNowBtn').addEventListener('click', () => {
+  const btn = document.getElementById('updateNowBtn');
+  btn.disabled = true;
+  document.getElementById('updateMsg').textContent = 'Updating…';
+  window.pywebview.api.run_update().then(res => {
+    btn.disabled = false;
+    document.getElementById('updateMsg').textContent = res.message;
+    renderUpdateSettings();
+  });
+});
+document.getElementById('updateCheckChk').addEventListener('change', (e) => {
+  window.pywebview.api.set_update_check_enabled(e.target.checked);
 });
 document.getElementById('geminiSignupBtn').addEventListener('click', () => {
   window.pywebview.api.open_gemini_signup();
@@ -1275,6 +1409,19 @@ document.getElementById('suggestCloseBtn').addEventListener('click', () => {
   document.getElementById('suggestPanel').classList.remove('open');
 });
 window.addEventListener('pywebviewready', checkSuggestions);
+function checkUpdates() {
+  window.pywebview.api.get_update_status().then(s => {
+    const badge = document.getElementById('updateBadge');
+    const flagged = s.update_available || (s.tampered_files && s.tampered_files.length);
+    if (flagged && !s.seen) {
+      badge.textContent = '!';
+      badge.classList.add('show');
+    } else {
+      badge.classList.remove('show');
+    }
+  });
+}
+window.addEventListener('pywebviewready', checkUpdates);
 document.getElementById('uninstallBtn').addEventListener('click', () => {
   if (confirm('This removes the picker hooks from this machine. Continue?')) {
     window.pywebview.api.uninstall().then(msg => {
@@ -1487,6 +1634,12 @@ class _PickerApi:
         save_picker_prefs(self.catalog_path, prefs)
         return prefs
 
+    def set_update_check_enabled(self, enabled):
+        prefs = load_picker_prefs(self.catalog_path)
+        prefs["update_check_enabled"] = bool(enabled)
+        save_picker_prefs(self.catalog_path, prefs)
+        return prefs
+
     def get_suggestions(self):
         data = load_suggestions_cache(self.catalog_path)
         valid_names = {e["name"] for e in self.catalog}
@@ -1526,6 +1679,102 @@ class _PickerApi:
         except Exception:
             pass
         return "ok"
+
+    def get_version(self):
+        return get_local_version()
+
+    def get_update_status(self):
+        return load_update_cache(self.catalog_path)
+
+    def mark_update_seen(self):
+        data = load_update_cache(self.catalog_path)
+        data["seen"] = True
+        save_update_cache(self.catalog_path, data)
+        return "ok"
+
+    def run_update(self):
+        """One-click update, triggered only by an explicit click — never
+        automatic. Backs up the installed hooks dir, clones the target
+        release's git TAG (never a floating branch), verifies its checksums,
+        then reuses install.sh/install.ps1 verbatim to apply it. Any failure
+        rolls back to the pre-update backup and leaves the existing install
+        untouched — this must never brick a user's setup."""
+        status = load_update_cache(self.catalog_path)
+        target = status.get("latest_version")
+        if not target or not status.get("update_available"):
+            return {"ok": False, "message": "No update available."}
+        if not shutil.which("git"):
+            return {"ok": False, "message": "git is required to update — install it and try again."}
+
+        work_root   = os.path.join(os.path.dirname(os.path.abspath(self.catalog_path)), "self-update")
+        backup_dir  = os.path.join(work_root, f"backup-{get_local_version()}-{int(time.time())}")
+        scratch_dir = os.path.join(work_root, "src")
+
+        try:
+            shutil.rmtree(scratch_dir, ignore_errors=True)
+            os.makedirs(work_root, exist_ok=True)
+            shutil.copytree(PICKER_DIR, backup_dir)
+        except Exception as e:
+            return {"ok": False, "message": f"Backup failed, aborted (nothing changed): {e}"}
+
+        def _rollback():
+            try:
+                for name in os.listdir(backup_dir):
+                    src, dst = os.path.join(backup_dir, name), os.path.join(PICKER_DIR, name)
+                    if os.path.isdir(src):
+                        shutil.rmtree(dst, ignore_errors=True)
+                        shutil.copytree(src, dst)
+                    else:
+                        shutil.copy2(src, dst)
+            except Exception:
+                pass
+
+        try:
+            r = subprocess.run(
+                ["git", "clone", "--depth", "1", "--branch", target, REPO_URL, scratch_dir],
+                capture_output=True, timeout=60, text=True,
+            )
+            if r.returncode != 0:
+                return {"ok": False, "message": f"Could not fetch {target} — aborted, nothing changed."}
+
+            mismatches = _verify_checksums_at(scratch_dir)
+            if mismatches:
+                return {"ok": False, "message": f"{len(mismatches)} file(s) in the release failed checksum verification — aborted, nothing changed."}
+
+            installer_name = "install.ps1" if platform.system() == "Windows" else "install.sh"
+            installer = os.path.join(scratch_dir, installer_name)
+            if not os.path.isfile(installer):
+                return {"ok": False, "message": "Installer script missing from the release — aborted."}
+
+            if platform.system() == "Windows":
+                r2 = subprocess.run(["powershell", "-ExecutionPolicy", "Bypass", "-File", installer],
+                                     capture_output=True, timeout=180, text=True)
+            else:
+                r2 = subprocess.run(["bash", installer], capture_output=True, timeout=180, text=True)
+            if r2.returncode != 0:
+                raise RuntimeError("install script failed")
+        except Exception:
+            _rollback()
+            return {"ok": False, "message": "Update failed — rolled back, your prior install is untouched."}
+        finally:
+            shutil.rmtree(scratch_dir, ignore_errors=True)
+
+        # Prune old backups, keep the 2 most recent.
+        try:
+            backups = sorted(
+                (d for d in os.listdir(work_root) if d.startswith("backup-")),
+                key=lambda d: os.path.getmtime(os.path.join(work_root, d)),
+            )
+            for d in backups[:-2]:
+                shutil.rmtree(os.path.join(work_root, d), ignore_errors=True)
+        except OSError:
+            pass
+
+        save_update_cache(self.catalog_path, {
+            "current_version": target, "latest_version": target,
+            "update_available": False, "tampered_files": [], "seen": True,
+        })
+        return {"ok": True, "message": f"Updated to {target} — restart your session to pick it up."}
 
     def close_window(self):
         _safe_destroy(self.window)
@@ -1581,6 +1830,8 @@ def try_pywebview(pending, catalog, catalog_path):
         remember_checked="checked" if remember_prev else "",
         account=html.escape(ACCOUNT_LINE),
         subscription=html.escape(SUBSCRIPTION_LINE),
+        version=html.escape(get_local_version()),
+        project_line=html.escape(PROJECT_LINE),
         open_settings="true" if os.environ.get("CLAUDE_SKILLS_PICKER_OPEN_SETTINGS") == "1" else "false",
     )
 

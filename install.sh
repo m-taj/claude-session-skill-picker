@@ -49,11 +49,21 @@ fi
 
 # ── 2. Copy scripts + overrides ───────────────────────────────────────────────
 mkdir -p "$HOOK_DIR"
-for f in skills-launch.py skills-picker.py skills-inject.py skills-settings.py skills-suggest.py; do
+for f in skills-launch.py skills-picker.py skills-inject.py skills-settings.py skills-suggest.py skills-update.py licensing.py; do
     cp "$SCRIPT_DIR/$f" "$HOOK_DIR/$f"
     chmod +x "$HOOK_DIR/$f"
     echo "  ✓ Installed $HOOK_DIR/$f"
 done
+
+# Version + release checksums — read by Settings > Updates and skills-update.py.
+# CHECKSUMS.txt only exists from the first tagged release onward; its absence
+# on a from-source checkout is fine, not an error.
+cp "$SCRIPT_DIR/VERSION" "$HOOK_DIR/VERSION"
+echo "  ✓ Installed $HOOK_DIR/VERSION"
+if [[ -f "$SCRIPT_DIR/CHECKSUMS.txt" ]]; then
+    cp "$SCRIPT_DIR/CHECKSUMS.txt" "$HOOK_DIR/CHECKSUMS.txt"
+    echo "  ✓ Installed $HOOK_DIR/CHECKSUMS.txt"
+fi
 
 # Overrides file: do NOT overwrite if the user has already customized it.
 OVR_SRC="$SCRIPT_DIR/skills-picker-overrides.json"

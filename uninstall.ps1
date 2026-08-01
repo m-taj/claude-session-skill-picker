@@ -25,7 +25,7 @@ if (Test-Path $adaptersDir) {
 }
 
 # --- 2. Remove installed scripts + assets ------------------------------------
-foreach ($f in @('skills-launch.py', 'skills-picker.py', 'skills-inject.py', 'skills-settings.py', 'skills-suggest.py', 'skills-picker-overrides.json')) {
+foreach ($f in @('skills-launch.py', 'skills-picker.py', 'skills-inject.py', 'skills-settings.py', 'skills-suggest.py', 'skills-update.py', 'licensing.py', 'VERSION', 'CHECKSUMS.txt', 'skills-picker-overrides.json')) {
     $p = Join-Path $HookDir $f
     if (Test-Path $p) {
         Remove-Item -Force $p
@@ -58,7 +58,9 @@ Remove-Item -ErrorAction SilentlyContinue -Force (Join-Path $CacheDir 'skills-co
 Remove-Item -ErrorAction SilentlyContinue -Force (Join-Path $CacheDir 'skills-picker-prefs.json')
 Remove-Item -ErrorAction SilentlyContinue -Force (Join-Path $CacheDir 'skills-usage-history.json')
 Remove-Item -ErrorAction SilentlyContinue -Force (Join-Path $CacheDir 'skills-suggestions-cache.json')
+Remove-Item -ErrorAction SilentlyContinue -Force (Join-Path $CacheDir 'skills-update-cache.json')
 Remove-Item -ErrorAction SilentlyContinue -Recurse -Force (Join-Path $CacheDir 'skill-repos')
+Remove-Item -ErrorAction SilentlyContinue -Recurse -Force (Join-Path $CacheDir 'self-update')
 Remove-Item -ErrorAction SilentlyContinue -Force (Join-Path $CacheDir 'skills-spawned-*.txt')
 Remove-Item -ErrorAction SilentlyContinue -Force (Join-Path $CacheDir 'skills-pending-*.txt')
 Remove-Item -ErrorAction SilentlyContinue -Force (Join-Path $CacheDir 'skills-picker-*.log')

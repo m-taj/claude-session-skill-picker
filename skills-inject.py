@@ -6,6 +6,8 @@ additionalContext block telling Claude to activate each picked skill via
 the Skill tool. Pending file format: one `name|arg` line per pick, where
 `arg` is empty for skills that take no arguments.
 Fast path target: < 50 ms.
+
+Part of claude-session-skill-picker — github.com/m-taj/claude-session-skill-picker
 """
 
 import os
