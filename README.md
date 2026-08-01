@@ -15,6 +15,7 @@ Also connects to **Codex** (ChatGPT's coding agent) and **OpenCode** — same di
 - A double-click Desktop shortcut opens Settings directly, with no terminal required
 - Disable the dialog or adjust its auto-close timeout from Settings — no shell config needed
 - Optional AI skill suggestions (free) — Settings shows skills you haven't tried yet, based on your usage over time
+- Checks for updates once a day and lets you apply one with a single click from Settings, pinned to a tagged GitHub release with automatic backup/rollback if anything goes wrong
 
 > First run after install may take ~2 seconds longer than usual — that's macOS/Windows initializing the webview runtime for the first time, not a recurring cost.
 
@@ -109,6 +110,18 @@ Based on your usage over the last 30 days, the picker can suggest skills you hav
 3. Toggle "Enable AI skill suggestions" on (on by default once a key is set).
 
 Suggestions refresh at most once a day and are computed by Google's Gemini API (free tier). **Only skill names and pick counts are ever sent — never your conversation or prompt text.** If you'd rather manage the key via your shell instead of the UI, set `GEMINI_API_KEY` as an environment variable — it takes priority over a key saved in Settings.
+
+---
+
+## Updates
+
+Once a day, the picker checks GitHub for a newer tagged release and shows a badge on the ⚙ gear icon if one's available. Settings → Updates shows your current version and, if a newer one exists, an "Update now" button.
+
+Updating never happens automatically — it only runs when you click the button. It clones the specific release tag (never a floating branch), verifies its checksums, then reuses the same install script you ran originally. If anything goes wrong partway through, your prior install is automatically restored — an update is never left half-applied.
+
+The same daily check also compares your installed files' checksums against the release's, so if a file was modified after install (accidentally or otherwise) you'll see a note about it in Settings → Updates. This is informational only — nothing is auto-reverted.
+
+Turn the daily check off from Settings → Updates if you'd rather update manually via `git pull` + re-running the install script.
 
 ---
 

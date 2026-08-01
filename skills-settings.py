@@ -8,6 +8,8 @@ made re-enabling a just-disconnected agent awkward mid-test.
 
 Usage:
     python3 skills-settings.py
+
+Part of claude-session-skill-picker — github.com/m-taj/claude-session-skill-picker
 """
 
 import os

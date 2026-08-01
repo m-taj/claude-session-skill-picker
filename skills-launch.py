@@ -6,6 +6,8 @@ SessionStart hook (async:true).
 3. Write a fresh catalog file.
 4. Spawn the picker GUI as a detached subprocess.
 Returns in <100 ms; never blocks the Claude Code TUI.
+
+Part of claude-session-skill-picker — github.com/m-taj/claude-session-skill-picker
 """
 
 import os
@@ -24,6 +26,7 @@ CACHE_DIR  = os.path.join(CLAUDE_DIR, "cache")
 HOOK_DIR   = os.path.dirname(os.path.abspath(__file__))
 PICKER     = os.path.join(HOOK_DIR, "skills-picker.py")
 SUGGEST    = os.path.join(HOOK_DIR, "skills-suggest.py")
+UPDATE     = os.path.join(HOOK_DIR, "skills-update.py")
 OVERRIDES  = os.path.join(HOOK_DIR, "skills-picker-overrides.json")
 SETTINGS   = os.path.join(CLAUDE_DIR, "settings.json")
 STALE_AGE  = 24 * 3600
@@ -433,6 +436,16 @@ def main():
         suggest_kwargs["stdout"] = subprocess.DEVNULL
         try:
             subprocess.Popen([py, SUGGEST], **suggest_kwargs)
+        except Exception:
+            pass
+
+    # Update / integrity check — same detached, best-effort, once-per-day
+    # pattern as the suggestions worker above.
+    if os.path.isfile(UPDATE):
+        update_kwargs = dict(kwargs)
+        update_kwargs["stdout"] = subprocess.DEVNULL
+        try:
+            subprocess.Popen([py, UPDATE], **update_kwargs)
         except Exception:
             pass
 

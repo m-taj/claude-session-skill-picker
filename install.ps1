@@ -47,11 +47,22 @@ Write-Host "  + Python 3 found (invocation: $PyCmd)"
 
 # --- 2. Copy scripts + overrides ---------------------------------------------
 New-Item -ItemType Directory -Force -Path $HookDir | Out-Null
-foreach ($f in @('skills-launch.py', 'skills-picker.py', 'skills-inject.py', 'skills-settings.py', 'skills-suggest.py')) {
+foreach ($f in @('skills-launch.py', 'skills-picker.py', 'skills-inject.py', 'skills-settings.py', 'skills-suggest.py', 'skills-update.py', 'licensing.py')) {
     $src = Join-Path $ScriptDir $f
     $dst = Join-Path $HookDir   $f
     Copy-Item -Force -Path $src -Destination $dst
     Write-Host "  + Installed $dst"
+}
+
+# Version + release checksums — read by Settings > Updates and skills-update.py.
+# CHECKSUMS.txt only exists from the first tagged release onward; its absence
+# on a from-source checkout is fine, not an error.
+Copy-Item -Force -Path (Join-Path $ScriptDir 'VERSION') -Destination (Join-Path $HookDir 'VERSION')
+Write-Host "  + Installed $(Join-Path $HookDir 'VERSION')"
+$checksumsSrc = Join-Path $ScriptDir 'CHECKSUMS.txt'
+if (Test-Path $checksumsSrc) {
+    Copy-Item -Force -Path $checksumsSrc -Destination (Join-Path $HookDir 'CHECKSUMS.txt')
+    Write-Host "  + Installed $(Join-Path $HookDir 'CHECKSUMS.txt')"
 }
 
 # Overrides file: do NOT overwrite if the user has already customized it.
