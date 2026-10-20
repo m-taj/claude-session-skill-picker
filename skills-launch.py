@@ -372,7 +372,16 @@ def _picker_disabled_via_prefs():
     except (OSError, ValueError):
         return False
 
+def _is_headless():
+    """`claude -p` / SDK runs (cron, scripts) set SESSION_ATTENDED=0 and
+    ENTRYPOINT=sdk-*; nobody is there to answer a picker."""
+    env = os.environ
+    return (env.get("CLAUDE_CODE_SESSION_ATTENDED") == "0"
+            or env.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"))
+
 def main():
+    if _is_headless():
+        sys.exit(0)
     if os.environ.get("CLAUDE_SKILLS_PICKER", "").lower() in ("off", "0", "false", "no"):
         sys.exit(0)
     if _picker_disabled_via_prefs():
